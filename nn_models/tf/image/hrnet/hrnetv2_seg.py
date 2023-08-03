@@ -7,6 +7,14 @@ https://github.com/HRNet/HRNet-Semantic-Segmentation
 import tensorflow as tf
 
 N_FILTERS_STEM_NET = 64
+N_BOTTLENECK_LAYERS_IN_STEM = 3 # any non-negative integer is valid
+
+# The main branch number of filters. The sub-branch will be this * 2
+BASE_BRANCH_FILTERS = 32
+
+
+# TODO
+# 1. try to change upsampling to con2dtranspose by enbling the bool to True
 
 def make_a_keras_model(input_shape, func, **kwargs):
     """
@@ -16,7 +24,12 @@ def make_a_keras_model(input_shape, func, **kwargs):
     :param kwargs: the kwa
     :return:
     """
-    inputs = tf.keras.layers.Input(shape=input_shape)
+    if isinstance(input_shape[0], tuple):
+        inputs = []
+        for each_input_shape in input_shape:
+            inputs.append(tf.keras.layers.Input(shape=each_input_shape))
+    else:
+        inputs = tf.keras.layers.Input(shape=input_shape)
     outputs = func(inputs, **kwargs)
     return tf.keras.Model(inputs=inputs, outputs=outputs)
 
@@ -123,7 +136,7 @@ def bottleneck_block(inputs, out_filters,  with_conv_shortcut=False):
 
     return outputs
 
-def stem_net(inputs, out_filters=N_FILTERS_STEM_NET):
+def stem_net(inputs, out_filters=N_FILTERS_STEM_NET, n_bottleneck_layers = N_BOTTLENECK_LAYERS_IN_STEM):
     """
     input_shape: (x1, x2, x3)
     output_shape: (x1//2, x2//2, x3 * 4)
@@ -133,7 +146,7 @@ def stem_net(inputs, out_filters=N_FILTERS_STEM_NET):
     # Guess: this is to reduce the cost of memory
 
 
-    x1 = conv_block(
+    x = conv_block(
         inputs=inputs,
         out_filters=out_filters,
         kernel_size=3,
@@ -142,13 +155,123 @@ def stem_net(inputs, out_filters=N_FILTERS_STEM_NET):
         bool_activation=True)
 
     # The # of bottleneck filters should be 4* out_filters
-    x2 = bottleneck_block(x1, 4*out_filters, with_conv_shortcut=True)
-    x3 = bottleneck_block(x2, 4*out_filters, with_conv_shortcut=False)
-    x4 = bottleneck_block(x3, 4*out_filters, with_conv_shortcut=False)
-    outputs = bottleneck_block(x4, 4*out_filters, with_conv_shortcut=False)
+    x = bottleneck_block(x, 4*out_filters, with_conv_shortcut=True)
+    for _ in range(n_bottleneck_layers):
+        x = bottleneck_block(x, 4*out_filters, with_conv_shortcut=False)
+    return x
 
+
+
+def _construct_transition_layer(x: tuple, out_filters_list: tuple or list):
+    """ Get transition layers which is responsible for split a new branch. Only the last one is split from the last input
+
+    x: list of inputs, size n
+    out_filters_list: tuple or list of integers, size n + 1
+    """
+    assert len(x) == len(out_filters_list) - 1
+    outputs = []
+    # For those original patches
+    for inputs, n_filters in zip(x, out_filters_list[:-1]):
+        x_ = conv_block(inputs=inputs, out_filters=n_filters, strides=(1, 1),
+                    kernel_size=3, bool_batchnorm=True, bool_activation=True)
+        outputs.append(x_)
+
+    # split from the last path. The size was cut by 2
+    x_ = conv_block(inputs=x[-1], out_filters=out_filters_list[-1], strides=(2, 2),
+                   kernel_size=3, bool_batchnorm=True, bool_activation=True)
+    outputs.append(x_)
     return outputs
 
+def construct_transition_layer(x: tuple, base_branch_filters=BASE_BRANCH_FILTERS):
+    """ refer to _construct_transition_layer
+    construct a transition layer by specify the list of x. A new branch will be split by end of x.
+    >>> construct_transition_layer([tf.keras.layers.Input(shape=(300, 300, 3))], base_branch_filters=32)
+    """
+
+    out_filters_list = [base_branch_filters * i for i in range(1, len(x) + 2)]
+    return _construct_transition_layer(x, out_filters_list)
+
+
+def upsample(x, filters, size=(2,2), use_transpose=False):
+    if use_transpose:
+        x = tf.keras.layers.Conv2DTranspose(filters, kernel_size=size, strides=size, padding="same", use_bias=False)(x)
+        x = tf.keras.layers.BatchNormalization(axis=3)(x)
+        return x
+    else:
+        x = conv_block(x, out_filters=filters, kernel_size=1, strides=(1,1), bool_batchnorm=True, bool_activation=False)
+        return tf.keras.layers.UpSampling2D(size=size)(x)
+
+def fuse_to_single_output(x: tuple, loc_calibrate: int,  base_layer_filters=BASE_BRANCH_FILTERS, bool_upsample_transpose=False):
+    """
+    This method use to interact between different branches by selecting a targe branch and downscale/upscale other
+    branches and then adding them together
+    The size of x[i-1] is 1 times larger than x[i]
+
+    :param x: tuple of inputs. Should be >= 2
+    :param loc_calibrate: integer (zero index), where input to be as target to calibrate
+    :param base_layer_filters: the x[0] # of filter
+    :param bool_upsample_transpose: bool, whether to
+        True:  use Con2Dtranspose to do upsampling
+        False: use Upsample to do upsampling which is simple and not required to much training
+
+    :return:
+    """
+
+    add_list = []
+
+    # down scale
+    for idx in range(loc_calibrate):
+        inputs = x[idx]
+        distance = abs(idx - loc_calibrate)
+        x_ = inputs
+        filters = base_layer_filters * int(2 ** idx)
+        size = (2, 2)
+        # each time only scale down by 2
+        for i in range(distance):
+            # the last down scale no need to do activation
+            if i == distance - 1:
+                bool_activate = False
+            else:
+                bool_activate = True
+            filters = int(2 * filters)
+            x_ = conv_block(inputs=x_, out_filters=filters, kernel_size=3, strides=size,
+                            bool_batchnorm=True, bool_activation=bool_activate)
+
+        add_list.append(x_)
+
+    # loc_calibrate
+    x_ = x[loc_calibrate]
+    filters = base_layer_filters * int(2 ** loc_calibrate)
+    x_ = conv_block(inputs=x_, out_filters=filters, kernel_size=1, strides=(1,1),
+                    bool_batchnorm=True, bool_activation=False)
+    add_list.append(x_)
+
+    # up sample
+    for idx in range(loc_calibrate+1, len(x)):
+        inputs = x[idx]
+        distance = abs(idx - loc_calibrate)
+        x_ = inputs
+        filters = base_layer_filters * int(2 ** loc_calibrate)
+        # simple scale
+        if not bool_upsample_transpose:
+            nsize = int(2 ** distance)
+            size = (nsize, nsize)
+            x_ = upsample(x_, filters, size, use_transpose=bool_upsample_transpose)
+        else:
+            size = (2, 2)
+            filters = base_layer_filters * int(2 ** idx)
+            # each time only scale up by 2
+            for i in range(distance):
+                filters = int(filters / 2)
+                x_ = upsample(x_, filters, size, use_transpose=bool_upsample_transpose)
+                if i != distance - 1: # need to activate
+                    x_ = tf.keras.layers.Activation('relu')(x_)
+        add_list.append(x_)
+    x = tf.keras.layers.add(add_list)
+    return x
 
 
 
+
+
+# TODO add fuse layers
