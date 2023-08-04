@@ -12,6 +12,41 @@ N_BOTTLENECK_LAYERS_IN_STEM = 3 # any non-negative integer is valid
 # The main branch number of filters. The sub-branch will be this * 2
 BASE_BRANCH_FILTERS = 32
 
+# number of block in a branch
+N_BLOCKS_PER_BRANCH = 4 # integer greater than 0. Orignal value is 4
+
+# whether to use Con2Dtranspose to do upsampling
+BOOL_UPSAMPLE_TRANSPOSE = False
+
+class ModelHyperParams:
+    @staticmethod
+    def set_n_filters_STEM_NET(value: int=64):
+        global N_FILTERS_STEM_NET
+        N_FILTERS_STEM_NET = value
+
+    @staticmethod
+    def set_n_booleneck_layers_in_STEM(value: int=3):
+        global N_BOTTLENECK_LAYERS_IN_STEM
+        N_BOTTLENECK_LAYERS_IN_STEM = value
+
+    @staticmethod
+    def set_base_branch_filters(value: int = 32):
+        global BASE_BRANCH_FILTERS
+        BASE_BRANCH_FILTERS = value
+
+    @staticmethod
+    def set_n_blocks_per_branch(value: int = 32):
+        global N_BLOCKS_PER_BRANCH
+        N_BLOCKS_PER_BRANCH = value
+
+    @staticmethod
+    def set_bool_upsamle_transpose(value: bool = False):
+        global BOOL_UPSAMPLE_TRANSPOSE
+        BOOL_UPSAMPLE_TRANSPOSE = value
+
+
+
+
 
 # TODO
 # 1. try to change upsampling to con2dtranspose by enbling the bool to True
@@ -139,7 +174,7 @@ def bottleneck_block(inputs, out_filters,  with_conv_shortcut=False):
 def stem_net(inputs, out_filters=N_FILTERS_STEM_NET, n_bottleneck_layers = N_BOTTLENECK_LAYERS_IN_STEM):
     """
     input_shape: (x1, x2, x3)
-    output_shape: (x1//2, x2//2, x3 * 4)
+    output_shape: (x1//2, x2//2, N_FILTERS_STEM_NET * 4)
     """
     # why reduce the size here and then upsample eventually? Why not to keep the original size by using
     # strides = (1,1)?
@@ -188,7 +223,7 @@ def construct_transition_layer(x: tuple, base_branch_filters=BASE_BRANCH_FILTERS
     >>> construct_transition_layer([tf.keras.layers.Input(shape=(300, 300, 3))], base_branch_filters=32)
     """
 
-    out_filters_list = [base_branch_filters * i for i in range(1, len(x) + 2)]
+    out_filters_list = [base_branch_filters * (2 ** i) for i in range(0, len(x) + 1)]
     return _construct_transition_layer(x, out_filters_list)
 
 
@@ -201,7 +236,7 @@ def upsample(x, filters, size=(2,2), use_transpose=False):
         x = conv_block(x, out_filters=filters, kernel_size=1, strides=(1,1), bool_batchnorm=True, bool_activation=False)
         return tf.keras.layers.UpSampling2D(size=size)(x)
 
-def fuse_to_single_output(x: tuple, loc_calibrate: int,  base_layer_filters=BASE_BRANCH_FILTERS, bool_upsample_transpose=False):
+def fuse_to_single_output(x: tuple, loc_calibrate: int,  base_layer_filters=BASE_BRANCH_FILTERS, bool_upsample_transpose=BOOL_UPSAMPLE_TRANSPOSE):
     """
     This method use to interact between different branches by selecting a targe branch and downscale/upscale other
     branches and then adding them together
@@ -271,7 +306,67 @@ def fuse_to_single_output(x: tuple, loc_calibrate: int,  base_layer_filters=BASE
     return x
 
 
+def construct_fuse_layers(x: tuple, base_layer_filters=BASE_BRANCH_FILTERS, bool_upsample_transpose=BOOL_UPSAMPLE_TRANSPOSE):
+    """
+    construct a fuse layer to merge all branches together
+    """
+    outputs = []
+    for loc_calibrate in range(len(x)):
+        out = fuse_to_single_output(
+            x,
+            loc_calibrate=loc_calibrate,
+            base_layer_filters=base_layer_filters,
+            bool_upsample_transpose=bool_upsample_transpose)
+        outputs.append(out)
+    return outputs
+
+def make_single_branch(x: tf.keras.layers.Layer, out_filters=32, n_blocks=N_BLOCKS_PER_BRANCH):
+    for _ in range(n_blocks):
+        x = basic_block(x, out_filters=out_filters)
+    return x
+
+def make_layer_branches(x: tuple, base_filters=BASE_BRANCH_FILTERS, n_blocks=N_BLOCKS_PER_BRANCH):
+    outs = []
+    for idx, inputs in enumerate(x):
+        n_filters = base_filters * (2 ** idx)
+        out = make_single_branch(x=inputs, out_filters=n_filters, n_blocks=n_blocks)
+        outs.append(out)
+    return outs
+
+def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS, bool_upsample_transpose=BOOL_UPSAMPLE_TRANSPOSE):
+    # since originally it is scaled down by 2,2. Upscale by 2*2 to original image size
+    size = (2, 2)
+    if bool_upsample_transpose:
+        x = tf.keras.layers.Conv2DTranspose(
+            base_filters, kernel_size=size, strides=size, padding="same", use_bias=False)(x)
+    else:
+        x = tf.keras.layers.UpSampling2D(size=(2,2))(x)
+    x = tf.keras.layers.Conv2D(n_class, 1, use_bias=False, kernel_initializer='he_normal')(x)
+    x = tf.keras.layers.BatchNormalization(axis=3)(x)
+    x = tf.keras.layers.Softmax(axis=-1)(x)
+    return x
 
 
 
-# TODO add fuse layers
+def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
+    inputs = tf.keras.layers.Input(shape=image_shape)
+    # step 1: interact
+    x = stem_net(inputs)
+    # convert x to list to be compatible with below
+    x = [x]
+
+    # split branch -> grow branch -> fuse branch: 3 stages
+    n_splits = 3
+    for i in range(n_splits): # 1->2 ->3 -> 4 branch
+        x = construct_transition_layer(x)
+        x = make_layer_branches(x)
+        if i == n_splits -1: # last layer not do a full fuse
+            x = fuse_to_single_output(x, loc_calibrate=0)
+        else:
+            x = construct_fuse_layers(x)
+    # construct output layer
+    seg_output = final_segmentation_layer(x, n_class=n_class)
+
+    model = tf.keras.Model(inputs=inputs, outputs=seg_output)
+
+    return model
