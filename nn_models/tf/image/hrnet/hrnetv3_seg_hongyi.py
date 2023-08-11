@@ -347,7 +347,8 @@ def make_layer_branches(x: tuple, base_filters=BASE_BRANCH_FILTERS, n_blocks=N_B
 
 
 def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
-                             bool_upsample_transpose=BOOL_UPSAMPLE_TRANSPOSE):
+                             bool_upsample_transpose=BOOL_UPSAMPLE_TRANSPOSE,
+                             name="segment_prob"):
     # since originally it is scaled down by 2,2. Upscale by 2*2 to original image size
     size = (2, 2)
     if bool_upsample_transpose:
@@ -357,10 +358,10 @@ def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
         x = tf.keras.layers.UpSampling2D(size=(2, 2))(x)
     x = tf.keras.layers.Conv2D(n_class, 1, use_bias=False, kernel_initializer='he_normal')(x)
     x = tf.keras.layers.BatchNormalization(axis=3)(x)
-    x = tf.keras.layers.Softmax(axis=-1)(x)
+    x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
     return x
 
-def final_vin_layer(x):
+def final_vin_layer(x, name="vin_prob"):
     N_VIN = 17
     OUTPUT_CHARS = 36
 
@@ -386,7 +387,7 @@ def final_vin_layer(x):
 
 
     x = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)(x)
-    x = tf.keras.layers.Softmax()(x)
+    x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
     # x shape is (17, OUTPUT_CHARS)
     return x
 
@@ -419,6 +420,9 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
     segment: shape is (H * W * n_class)
     vin: shape is (17 * 36)
     """
+    name_segment_prob = "segment_prob"
+    name_vin_prob = "vin_prob"
+
     inputs = tf.keras.layers.Input(shape=image_shape)
     # step 1: interact
     x = stem_net(inputs)
@@ -435,19 +439,15 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
         else:
             x = construct_fuse_layers(x)
     # construct output layer
-    seg_output_prob = final_segmentation_layer(x, n_class=n_class)
+    seg_output_prob = final_segmentation_layer(x, n_class=n_class, name=name_segment_prob)
     seg_category = seg_prob_to_category(seg_prob=seg_output_prob)
-    vin_output_prob = final_vin_layer(x)
+    vin_output_prob = final_vin_layer(x, name=name_vin_prob)
     vin_string = vin_prob_to_string(vin_output_prob)
 
-    # model = tf.keras.Model(inputs=inputs, outputs=[seg_output, vin_output])
-    model = tf.keras.Model(inputs=inputs, outputs={
-        "segment_prob": seg_output_prob,
-        "vin_prob": vin_output_prob,
-        "segment_categoy": seg_category,
-        "vin_category": vin_string})
+    # to connect outputs with loss. You need to configure model.compile(loss={<layer_name>: loss_type})
+    model = tf.keras.Model(inputs=inputs,
+                           outputs = [seg_output_prob, vin_output_prob, seg_category, vin_string],
+                           )
 
-    # TODO test seg_prob_to_category
-    # TODO test vin_prob_to_string
 
     return model
