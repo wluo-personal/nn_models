@@ -9,6 +9,7 @@ https://github.com/HRNet/HRNet-Semantic-Segmentation
 """
 
 import tensorflow as tf
+import string
 
 N_FILTERS_STEM_NET = 64
 N_BOTTLENECK_LAYERS_IN_STEM = 3  # any non-negative integer is valid
@@ -389,6 +390,24 @@ def final_vin_layer(x):
     # x shape is (17, OUTPUT_CHARS)
     return x
 
+def seg_prob_to_category(seg_prob):
+    return tf.keras.layers.Lambda(lambda x: tf.math.argmax(x, axis=-1))(seg_prob)
+
+def vin_prob_to_string(vin_prob):
+    # vals_tensor = tf.constant(string.ascii_uppercase + string.digits)
+    # vals_tensor = tf.strings.bytes_split(vals_tensor)
+    # keys_tensor = tf.constant(list(range(36)), dtype=tf.int32)
+    # initializer = tf.lookup.KeyValueTensorInitializer(keys_tensor, vals_tensor)
+    # table = tf.lookup.StaticHashTable(
+    #     initializer,
+    #     default_value="?")
+    vin_category = tf.keras.layers.Lambda(lambda x: tf.math.argmax(x, axis=-1))(vin_prob)
+    vin_category = tf.cast(vin_category, dtype=tf.int32)
+    # vins = table.lookup(vin_category)
+    # The lookup cannot be used here, otherwise it will complains about the gradient issue
+    # vins = tf.keras.layers.Lambda(lambda x: tf.strings.reduce_join(vins, axis=-1))(vins)
+    return vin_category
+
 
 def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
     """
@@ -416,10 +435,19 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
         else:
             x = construct_fuse_layers(x)
     # construct output layer
-    seg_output = final_segmentation_layer(x, n_class=n_class)
-    vin_output = final_vin_layer(x)
+    seg_output_prob = final_segmentation_layer(x, n_class=n_class)
+    seg_category = seg_prob_to_category(seg_prob=seg_output_prob)
+    vin_output_prob = final_vin_layer(x)
+    vin_string = vin_prob_to_string(vin_output_prob)
 
     # model = tf.keras.Model(inputs=inputs, outputs=[seg_output, vin_output])
-    model = tf.keras.Model(inputs=inputs, outputs={"segment": seg_output, "vin": vin_output})
+    model = tf.keras.Model(inputs=inputs, outputs={
+        "segment_prob": seg_output_prob,
+        "vin_prob": vin_output_prob,
+        "segment_categoy": seg_category,
+        "vin_category": vin_string})
+
+    # TODO test seg_prob_to_category
+    # TODO test vin_prob_to_string
 
     return model
