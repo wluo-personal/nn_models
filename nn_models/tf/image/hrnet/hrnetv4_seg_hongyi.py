@@ -366,46 +366,34 @@ def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
 def final_vin_layer(x, name="vin_prob"):
     N_VIN = 17
     OUTPUT_CHARS = 36
-
+    # concats = [tf.keras.layers.GlobalAveragePooling2D()(x),
+    #            tf.keras.layers.GlobalMaxPooling2D()(x)]
     x = tf.keras.layers.Conv2D(
-        filters=N_VIN,
-        kernel_size=(2,2),
-        strides=(2, 2),
+        filters=1588,
+        kernel_size=(1,1),
+        strides=(1, 1),
         padding="valid",
         use_bias=False,
         kernel_initializer='he_normal')(x)
-    #x is (shape[0]//2, shape[1]//2, 17)
+    x = tf.keras.layers.BatchNormalization(axis=3)(x)
+    # concats = []
+    # concats.append(tf.keras.layers.GlobalAveragePooling2D()(x))
+    # concats.append(tf.keras.layers.GlobalMaxPooling2D()(x))
+    # x = tf.keras.layers.Concatenate()(concats)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
 
-    # x = tf.keras.layers.Conv2D(
-    #     filters=N_VIN,
-    #     kernel_size=(1,1),
-    #     strides=(1, 1),
-    #     padding="valid",
-    #     use_bias=False,
-    #     kernel_initializer='he_normal')(x)
-    # x = tf.keras.layers.BatchNormalization(axis=3)(x)
+    x = tf.keras.layers.Dropout(0.5)(x)
+    concats = []
+    for _ in range(N_VIN):
+        x_ = tf.keras.layers.Dense(units=OUTPUT_CHARS)(x)
+        x_ = tf.keras.layers.Softmax(axis=-1)(x_)
+        concats.append(x_)
 
-    # ---- option 1
-    x = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(x, axis=2))(x)
-    # x is (shape[0]//2, 17)
-    x = tf.keras.layers.Permute(dims=(2, 1))(x)
-    # x is (17, shape[0]//2)
-
-    # # ---- option 2
-    # x = tf.keras.layers.Flatten()(x)
-    # x = tf.keras.layers.Reshape((N_VIN, -1))(x)
-
-
-
-    # attention
-    x = tf.keras.layers.MultiHeadAttention(5, 64)(x, x, return_attention_scores=False)
-    # x shape (17, shape[0]//2)
-
-
-    x = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)(x)
-    x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
-    # x shape is (17, OUTPUT_CHARS)
+    # x = tf.keras.layers.(name=name)(concats)
+    x = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=1), name=name)(concats)
     return x
+
+
 
 def seg_prob_to_category(seg_prob, name="segment_category"):
     return tf.keras.layers.Lambda(lambda x: tf.math.argmax(x, axis=-1), name=name)(seg_prob)
@@ -432,9 +420,9 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
 
     inputs = tf.keras.layers.Input(shape=image_shape)
     # step 1: interact
-    x_stem = stem_net(inputs)
+    x = stem_net(inputs)
     # convert x to list to be compatible with below
-    x = [x_stem]
+    x = [x]
 
     # split branch -> grow branch -> fuse branch: 3 stages
     n_splits = 3
