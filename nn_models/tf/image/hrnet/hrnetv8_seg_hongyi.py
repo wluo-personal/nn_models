@@ -1,5 +1,5 @@
 """
-Best version no-touch
+Improve of v5. WIP no share weights.
 """
 
 """
@@ -364,26 +364,6 @@ def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
     x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
     return x
 
-# # ---- Option 1 Dense
-# def final_vin_layer(x, name="vin_prob"):
-#     N_VIN = 17
-#     OUTPUT_CHARS = 36
-#
-#     x = tf.keras.layers.Conv2D(
-#         filters=N_VIN,
-#         kernel_size=(2,2),
-#         strides=(2, 2),
-#         padding="valid",
-#         use_bias=False,
-#         kernel_initializer='he_normal')(x)
-#     x = tf.keras.layers.BatchNormalization(axis=3)(x)
-#     x = tf.keras.layers.Activation("relu")(x)
-#     x = tf.keras.layers.Flatten()(x)
-#     x = tf.keras.layers.Reshape(target_shape=(-1, N_VIN))(x)
-#     x = tf.keras.layers.Permute(dims=(2, 1))(x)
-#     x = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)(x)
-#     x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
-#     return x
 
 # ---- Option 2 pooling
 def final_vin_layer(x, name="vin_prob"):
@@ -392,27 +372,38 @@ def final_vin_layer(x, name="vin_prob"):
 
     x = tf.keras.layers.Conv2D(
         filters=N_VIN,
-        kernel_size=(2,2),
+        kernel_size=(3,3),
         strides=(2, 2),
         padding="valid",
         use_bias=False,
         kernel_initializer='he_normal')(x)
     x = tf.keras.layers.BatchNormalization(axis=3)(x)
     x = tf.keras.layers.Activation("relu")(x)
-    concats = []
-    x_ = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(x, axis=2))(x)
-    concats.append(x_)
-    x_ = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(x, axis=1))(x)
-    concats.append(x_)
-    x_ = tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=2))(x)
-    concats.append(x_)
-    x_ = tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=1))(x)
-    concats.append(x_)
-    x = tf.keras.layers.Concatenate(axis=1)(concats)
 
-    x = tf.keras.layers.Permute(dims=(2, 1))(x)
-    x = tf.keras.layers.Dense(128, activation="relu")(x)
-    x = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)(x)
+    seq = tf.keras.Sequential()
+    for filters in (16, 64, 128):
+        seq.add(
+            tf.keras.layers.Conv2D(filters=filters, kernel_size=3, strides=2, use_bias=False, kernel_initializer='he_normal')
+        )
+        seq.add(
+            tf.keras.layers.BatchNormalization(axis=-1)
+        )
+        seq.add(tf.keras.layers.Activation("relu"))
+    seq.add(
+        tf.keras.layers.Conv2D(filters=OUTPUT_CHARS, kernel_size=1, strides=1, use_bias=False,
+                               kernel_initializer='he_normal')
+    )
+    seq.add(
+        tf.keras.layers.BatchNormalization(axis=-1)
+    )
+    seq.add(tf.keras.layers.Activation("relu"))
+    seq.add(tf.keras.layers.GlobalAveragePooling2D())
+    concats = []
+    for layer_id in range(N_VIN):
+        x_ = x[:,:,:,layer_id:layer_id+1]
+        x_ = seq(x_)
+        concats.append(x_)
+    x = tf.stack(concats, axis=1)
     x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
     return x
 

@@ -1,5 +1,5 @@
 """
-This is the backup of ori v5
+Improve of v5. WIP no share weights.
 """
 
 """
