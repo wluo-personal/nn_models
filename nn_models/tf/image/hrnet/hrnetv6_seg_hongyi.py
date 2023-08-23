@@ -1,5 +1,6 @@
 """
-This is the backup of ori v5
+This is the variance of v5
+-- the segmentation is changed to bool mask and then feed to vin recognition layer
 """
 
 """
@@ -10,6 +11,7 @@ https://github.com/HRNet/HRNet-Semantic-Segmentation
 
 import tensorflow as tf
 import string
+from nn_models.tf.image.hrnet.mobile_inception import (base_block, base_cba)
 
 N_FILTERS_STEM_NET = 64
 N_BOTTLENECK_LAYERS_IN_STEM = 3  # any non-negative integer is valid
@@ -359,61 +361,69 @@ def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
         x = tf.keras.layers.Activation("relu")(x)
     else:
         x = tf.keras.layers.UpSampling2D(size=(2, 2))(x)
-    x = tf.keras.layers.Conv2D(n_class, 1, use_bias=False, kernel_initializer='he_normal')(x)
-    x = tf.keras.layers.BatchNormalization(axis=3)(x)
-    x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
-    return x
 
-# # ---- Option 1 Dense
+    x = tf.keras.layers.Conv2D(n_class, 1, use_bias=False, kernel_initializer='he_normal')(x)
+    raw = tf.keras.layers.BatchNormalization(axis=3)(x)
+    x = tf.keras.layers.Softmax(axis=-1, name=name)(raw)
+    return x, raw
+
 # def final_vin_layer(x, name="vin_prob"):
 #     N_VIN = 17
 #     OUTPUT_CHARS = 36
 #
-#     x = tf.keras.layers.Conv2D(
-#         filters=N_VIN,
-#         kernel_size=(2,2),
-#         strides=(2, 2),
-#         padding="valid",
-#         use_bias=False,
-#         kernel_initializer='he_normal')(x)
-#     x = tf.keras.layers.BatchNormalization(axis=3)(x)
-#     x = tf.keras.layers.Activation("relu")(x)
-#     x = tf.keras.layers.Flatten()(x)
-#     x = tf.keras.layers.Reshape(target_shape=(-1, N_VIN))(x)
-#     x = tf.keras.layers.Permute(dims=(2, 1))(x)
-#     x = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)(x)
+#     # x = tf.keras.layers.LayerNormalization(axis=-1)(x)
+#     concats = []
+#     seq = tf.keras.Sequential()
+#     for filters in (8, 16, 64, 128):
+#         seq.add(tf.keras.layers.Conv2D(
+#             filters=filters, kernel_size=3, strides=2,
+#             use_bias=False, activation=None, padding="same"))
+#         seq.add(tf.keras.layers.BatchNormalization(axis=-1))
+#         seq.add(tf.keras.layers.Activation("relu"))
+#     seq.add(tf.keras.layers.Conv2D(
+#         filters=OUTPUT_CHARS, kernel_size=1, strides=1, use_bias=False, activation=None, padding="same"))
+#     seq.add(tf.keras.layers.BatchNormalization(axis=-1))
+#     seq.add(tf.keras.layers.Activation("relu"))
+#     seq.add(tf.keras.layers.GlobalAveragePooling2D())
+#
+#
+#     for layer_id in range(1, N_VIN + 1):
+#         x_ = x[:,:,:,layer_id:layer_id+1]
+#         x_ = seq(x_)
+#         concats.append(x_)
+#     x = tf.stack(concats, axis=1)
 #     x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
+#
+#     print("vvv9")
 #     return x
 
-# ---- Option 2 pooling
 def final_vin_layer(x, name="vin_prob"):
     N_VIN = 17
     OUTPUT_CHARS = 36
 
-    x = tf.keras.layers.Conv2D(
-        filters=N_VIN,
-        kernel_size=(2,2),
-        strides=(2, 2),
-        padding="valid",
-        use_bias=False,
-        kernel_initializer='he_normal')(x)
-    x = tf.keras.layers.BatchNormalization(axis=3)(x)
-    x = tf.keras.layers.Activation("relu")(x)
+    # x = tf.keras.layers.LayerNormalization(axis=-1)(x)
     concats = []
-    x_ = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(x, axis=2))(x)
-    concats.append(x_)
-    x_ = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(x, axis=1))(x)
-    concats.append(x_)
-    x_ = tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=2))(x)
-    concats.append(x_)
-    x_ = tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=1))(x)
-    concats.append(x_)
-    x = tf.keras.layers.Concatenate(axis=1)(concats)
+    seq = tf.keras.Sequential()
+    for filters in (2, 4, 8):
+        seq.add(tf.keras.layers.Conv2D(
+            filters=filters, kernel_size=3, strides=2,
+            use_bias=False, activation=None, padding="same"))
+        seq.add(tf.keras.layers.BatchNormalization(axis=-1))
+        seq.add(tf.keras.layers.Activation("relu"))
+    seq.add(tf.keras.layers.Flatten())
+    seq.add(tf.keras.layers.Dense(OUTPUT_CHARS))
 
-    x = tf.keras.layers.Permute(dims=(2, 1))(x)
-    x = tf.keras.layers.Dense(128, activation="relu")(x)
-    x = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)(x)
+    x = tf.keras.layers.Lambda(lambda x: tf.math.argmax(x, axis=-1))(x)
+    for layer_id in range(1, N_VIN + 1):
+        x_ = tf.equal(x, layer_id)
+        x_ = tf.cast(x_, tf.float32)
+        x_ = tf.expand_dims(x_, axis=-1)
+        x_ = seq(x_)
+        concats.append(x_)
+    x = tf.stack(concats, axis=1)
     x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
+
+    print("vvv10")
     return x
 
 def seg_prob_to_category(seg_prob, name="segment_category"):
@@ -455,9 +465,9 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
         else:
             x = construct_fuse_layers(x)
     # construct output layer
-    seg_output_prob = final_segmentation_layer(x, n_class=n_class, name=name_segment_prob)
+    seg_output_prob, seg_output_raw = final_segmentation_layer(x, n_class=n_class, name=name_segment_prob)
     seg_category = seg_prob_to_category(seg_prob=seg_output_prob, name=name_segment_cat)
-    vin_output_prob = final_vin_layer(x, name=name_vin_prob)
+    vin_output_prob = final_vin_layer(seg_output_prob, name=name_vin_prob)
     vin_string = vin_prob_to_string(vin_output_prob, name=name_vin_cat)
 
     # to connect outputs with loss. You need to configure model.compile(loss={<layer_name>: loss_type})
@@ -467,3 +477,6 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
 
 
     return model
+
+
+# TODO 1. for each layer get the mask and then feed into the same recognition layer
