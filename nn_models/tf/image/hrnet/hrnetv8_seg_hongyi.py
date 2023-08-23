@@ -369,41 +369,10 @@ def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
 def final_vin_layer(x, name="vin_prob"):
     N_VIN = 17
     OUTPUT_CHARS = 36
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x = tf.keras.layers.Dense(N_VIN * OUTPUT_CHARS)(x)
 
-    x = tf.keras.layers.Conv2D(
-        filters=N_VIN,
-        kernel_size=(3,3),
-        strides=(2, 2),
-        padding="valid",
-        use_bias=False,
-        kernel_initializer='he_normal')(x)
-    x = tf.keras.layers.BatchNormalization(axis=3)(x)
-    x = tf.keras.layers.Activation("relu")(x)
-
-    seq = tf.keras.Sequential()
-    for filters in (16, 64, 128):
-        seq.add(
-            tf.keras.layers.Conv2D(filters=filters, kernel_size=3, strides=2, use_bias=False, kernel_initializer='he_normal')
-        )
-        seq.add(
-            tf.keras.layers.BatchNormalization(axis=-1)
-        )
-        seq.add(tf.keras.layers.Activation("relu"))
-    seq.add(
-        tf.keras.layers.Conv2D(filters=OUTPUT_CHARS, kernel_size=1, strides=1, use_bias=False,
-                               kernel_initializer='he_normal')
-    )
-    seq.add(
-        tf.keras.layers.BatchNormalization(axis=-1)
-    )
-    seq.add(tf.keras.layers.Activation("relu"))
-    seq.add(tf.keras.layers.GlobalAveragePooling2D())
-    concats = []
-    for layer_id in range(N_VIN):
-        x_ = x[:,:,:,layer_id:layer_id+1]
-        x_ = seq(x_)
-        concats.append(x_)
-    x = tf.stack(concats, axis=1)
+    x = tf.keras.layers.Reshape(target_shape=(N_VIN, OUTPUT_CHARS))(x)
     x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
     return x
 
