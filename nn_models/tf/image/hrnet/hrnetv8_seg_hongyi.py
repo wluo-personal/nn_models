@@ -457,5 +457,4 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
 
     return model
 
-
 # TODO 1. for each layer get the mask and then feed into the same recognition layer
