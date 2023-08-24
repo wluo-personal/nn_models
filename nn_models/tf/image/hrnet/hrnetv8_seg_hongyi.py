@@ -370,39 +370,34 @@ def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
 def final_vin_layer(x, name="vin_prob"):
     N_VIN = 17
     OUTPUT_CHARS = 36
+    x = base_cba(x, 64, kernel_size=3, strides=2, activation="relu")
+    x = base_cba(x, 128, kernel_size=3, strides=2, activation="relu")
+    x = base_cba(x, 256, kernel_size=3, strides=2, activation="relu")
+    x = base_cba(x, 512, kernel_size=3, strides=2, activation="relu")
+    x = tf.keras.layers.GlobalMaxPooling2D()(x)
+    ebd = tf.keras.layers.Embedding(input_dim=N_VIN + 1, output_dim=3, input_length=1)
 
-    # x = tf.keras.layers.LayerNormalization(axis=-1)(x)
-    concats = []
-    seq = tf.keras.Sequential()
-    for filters in (2, 4, 8):
-        seq.add(tf.keras.layers.Conv2D(
-            filters=filters, kernel_size=3, strides=2,
-            use_bias=False, activation=None, padding="same"))
-        seq.add(tf.keras.layers.BatchNormalization(axis=-1))
-        seq.add(tf.keras.layers.Activation("relu"))
-    seq.add(tf.keras.layers.Flatten())
-
-    interaction = tf.keras.layers.Dense(128, activation="relu")
-    merge = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)
-    ebd = tf.keras.layers.Embedding(input_dim=N_VIN+2, output_dim=4, input_length=1)
+    merge1 = tf.keras.layers.Dense(128, activation="relu")
+    merge2 = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)
     flatten = tf.keras.layers.Flatten()
     concat = tf.keras.layers.Concatenate()
 
-    token = tf.zeros_like(x)[:, :1, 0]
-    for layer_id in range(1, N_VIN + 1):
-        x_ = x[:,:,:,layer_id:layer_id+1]
-        x_ = seq(x_)
+    token = tf.zeros_like(x)[:, :1]
+    concats = []
+    for layer_id in range(0, N_VIN):
         x_ebd_ = ebd(tf.cast(token + layer_id, tf.int32))
         x_ebd_ = flatten(x_ebd_)
-        x_ = concat([x_, x_ebd_])
-        x_ = interaction(x_)
-        x_ = merge(x_)
-
+        x_ = concat([x, x_ebd_])
+        x_ = tf.keras.layers.Dropout(0.5)(x_)
+        x_ = merge1(x_)
+        x_ = tf.keras.layers.Dropout(0.5)(x_)
+        x_ = merge2(x_)
         concats.append(x_)
+
     x = tf.stack(concats, axis=1)
     x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
 
-    print("vvv11")
+    print("vvv13")
     return x
 
 def seg_prob_to_category(seg_prob, name="segment_category"):
