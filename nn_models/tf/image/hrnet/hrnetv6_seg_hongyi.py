@@ -384,7 +384,7 @@ def final_vin_layer(x, name="vin_prob"):
 
     interaction = tf.keras.layers.Dense(128, activation="relu")
     merge = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)
-    ebd = tf.keras.layers.Embedding(input_dim=N_VIN, output_dim=4, input_length=1)
+    ebd = tf.keras.layers.Embedding(input_dim=N_VIN+2, output_dim=4, input_length=1)
     flatten = tf.keras.layers.Flatten()
     concat = tf.keras.layers.Concatenate()
 
@@ -395,7 +395,7 @@ def final_vin_layer(x, name="vin_prob"):
         x_ = tf.cast(x_, tf.float32)
         x_ = tf.expand_dims(x_, axis=-1)
         x_ = seq(x_)
-        x_ebd_ = ebd(token + layer_id)
+        x_ebd_ = ebd(tf.cast(token + layer_id, tf.int32))
         x_ebd_ = flatten(x_ebd_)
         x_ = concat([x_, x_ebd_])
         x_ = interaction(x_)
