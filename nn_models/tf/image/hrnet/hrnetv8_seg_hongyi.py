@@ -407,11 +407,15 @@ def final_vin_layer(x, name="vin_prob"):
     x_argmax = tf.keras.layers.Lambda(lambda x: tf.math.argmax(x, axis=-1), dtype=tf.int32)(x)
 
     ones = tf.ones_like(x_argmax, dtype=tf.int32)[:, :1, 0]
+    zeros = tf.zeros_like(x)[:, :1, 0]
     ones = tf.repeat(ones, N_VIN, axis=1)
     # batch * N_VIN
     one_hot_indices = tf.range(0, N_VIN) * ones
     # batch * N_VIN(depth) * N_VIN
     onehot = tf.one_hot(one_hot_indices, dtype=tf.float32, depth=N_VIN)
+
+    ## embedding
+    ebd = tf.keras.layers.Embedding(input_dim=N_VIN + 2, output_dim=4, input_length=1)
 
     seq = tf.keras.Sequential()
     for filters in (4, 8, 16):
@@ -425,6 +429,7 @@ def final_vin_layer(x, name="vin_prob"):
     concat_layer = tf.keras.layers.Concatenate()
     interaction = tf.keras.layers.Dense(128, activation="relu")
     merge = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)
+    flatten = tf.keras.layers.Flatten()
 
     concats = []
     for layer_id in range(1, N_VIN+1):
@@ -434,7 +439,12 @@ def final_vin_layer(x, name="vin_prob"):
         mask = tf.expand_dims(mask, axis=-1)
         x_ = x * mask
         x_ = seq(x_)
-        x_ = concat_layer([x_, onehot[:,layer_id-1, :]])
+        # -- option 1 embedding
+        x_ebd_ = ebd(tf.cast(zeros + layer_id, tf.int32))
+        x_ebd_ = flatten(x_ebd_)
+        # -- option 2 onehot
+        # x_ = concat_layer([x_, onehot[:, layer_id - 1, :]])
+        x_ = concat_layer([x_, x_ebd_])
         x_ = interaction(x_)
         x_ = merge(x_)
 
