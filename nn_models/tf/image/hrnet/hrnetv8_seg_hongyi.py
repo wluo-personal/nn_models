@@ -432,11 +432,15 @@ def final_vin_layer(x, name="vin_prob"):
     flatten = tf.keras.layers.Flatten()
 
     concats = []
+    attention_score = tf.keras.layers.Softmax(axis=-1)(x)
     for layer_id in range(1, N_VIN+1):
-        mask = tf.equal(x_argmax, layer_id)
-        mask = bounding_box_calculation(mask)
-        mask = tf.cast(mask, tf.float32)
-        mask = tf.expand_dims(mask, axis=-1)
+        # mask = tf.equal(x_argmax, layer_id)
+        # mask = bounding_box_calculation(mask)
+        # mask = tf.cast(mask, tf.float32)
+        # mask = tf.expand_dims(mask, axis=-1)
+
+        # use attention score to replace mask
+        mask = attention_score[:,:,:,layer_id:layer_id+1]
         x_ = x * mask
         x_ = seq(x_)
         # -- option 1 embedding
