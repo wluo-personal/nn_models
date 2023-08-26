@@ -400,7 +400,7 @@ def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
 #     print("vvv13")
 #     return x
 
-def final_vin_layer(x, name="vin_prob"):
+def final_vin_layer(x, ori_image=None, name="vin_prob"):
     N_VIN = 17
     OUTPUT_CHARS = 36
 
@@ -441,7 +441,7 @@ def final_vin_layer(x, name="vin_prob"):
 
         # use attention score to replace mask
         mask = attention_score[:,:,:,layer_id:layer_id+1]
-        x_ = x * mask
+        x_ = ori_image * mask
         x_ = seq(x_)
         # -- option 1 embedding
         x_ebd_ = ebd(tf.cast(zeros + layer_id, tf.int32))
@@ -456,7 +456,7 @@ def final_vin_layer(x, name="vin_prob"):
     x = tf.stack(concats, axis=1)
     x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
 
-    print("vvv17")
+    print("vvv18")
     return x
 
 
@@ -557,7 +557,7 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
     # construct output layer
     seg_output_prob, seg_output_raw = final_segmentation_layer(x, n_class=n_class, name=name_segment_prob)
     seg_category = seg_prob_to_category(seg_prob=seg_output_prob, name=name_segment_cat)
-    vin_output_prob = final_vin_layer(seg_output_raw, name=name_vin_prob)
+    vin_output_prob = final_vin_layer(seg_output_raw, ori_image=inputs, name=name_vin_prob)
     vin_string = vin_prob_to_string(vin_output_prob, name=name_vin_cat)
 
     # to connect outputs with loss. You need to configure model.compile(loss={<layer_name>: loss_type})
