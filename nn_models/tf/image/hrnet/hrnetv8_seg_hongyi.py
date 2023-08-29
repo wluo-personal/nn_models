@@ -400,7 +400,7 @@ def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
 #     print("vvv13")
 #     return x
 
-def final_vin_layer(x, ori_image=None, name="vin_prob"):
+def final_vin_layer(x, x_prob, name="vin_prob"):
     N_VIN = 17
     OUTPUT_CHARS = 36
 
@@ -432,24 +432,26 @@ def final_vin_layer(x, ori_image=None, name="vin_prob"):
     flatten = tf.keras.layers.Flatten()
 
     concats = []
-    attention_score = tf.keras.layers.Softmax(axis=-1)(x)
-    for layer_id in range(1, N_VIN+1):
-        # mask = tf.equal(x_argmax, layer_id)
-        # mask = bounding_box_calculation(mask)
-        # mask = tf.cast(mask, tf.float32)
-        # mask = tf.expand_dims(mask, axis=-1)
+    # attention_seq = get_attention_sequencial()
+    # attention_score = attention_seq(x_prob[:,:,:,1: N_VIN+1])
+    mask = x_prob > (1 / 20)
+    mask = tf.cast(mask, tf.float32)
+    # x_prob = x_prob * mask
 
-        # use attention score to replace mask
-        mask = attention_score[:,:,:,layer_id:layer_id+1]
-        x_ = ori_image * mask
+    for layer_id in range(1, N_VIN+1):
+        # x_ = x_prob * attention_score[:,:,:,layer_id-1: layer_id]
+        x_ = mask[:,:,:,layer_id:layer_id+1] * x_prob
         x_ = seq(x_)
+
         # -- option 1 embedding
         x_ebd_ = ebd(tf.cast(zeros + layer_id, tf.int32))
         x_ebd_ = flatten(x_ebd_)
         # -- option 2 onehot
         # x_ = concat_layer([x_, onehot[:, layer_id - 1, :]])
         x_ = concat_layer([x_, x_ebd_])
+        x_ = tf.keras.layers.Dropout(0.5)(x_)
         x_ = interaction(x_)
+        x_ = tf.keras.layers.Dropout(0.5)(x_)
         x_ = merge(x_)
 
         concats.append(x_)
@@ -460,59 +462,24 @@ def final_vin_layer(x, ori_image=None, name="vin_prob"):
     return x
 
 
-def bounding_box_calculation(x):
+def get_attention_sequencial():
     """
-
-    :param x: (batch, x, y), bool value in each entry
+    x shape is (H, W, 1)
+    :param x:
     :return:
     """
-    # x1, x2 is the mask
-    x1 = tf.math.reduce_any(x, axis=2)
-    x2 = tf.math.reduce_any(x, axis=1)
-    x1 = tf.cast(x1, tf.int32)
-    x2 = tf.cast(x2, tf.int32)
-    indice1 = tf.ones_like(x1, dtype=tf.int32)
-    indice2 = tf.ones_like(x2, dtype=tf.int32)
-    indice1 = tf.math.cumsum(indice1, axis=-1) - 1
-    indice2 = tf.math.cumsum(indice2, axis=-1) - 1
-    indice1_rev = indice1[:, ::-1]
-    indice2_rev = indice2[:, ::-1]
-
-    arg_max_1 = tf.math.argmax(indice1 * x1, axis=-1)
-    arg_max_2 = tf.math.argmax(indice2 * x2, axis=-1)
-    # x1, 2 cannot be reverse to calculate the min
-    arg_min_1 = tf.math.argmax(indice1_rev * x1, axis=-1)
-    arg_min_2 = tf.math.argmax(indice2_rev * x2, axis=-1)
-
-
-    # convert type
-    arg_max_1 = tf.cast(arg_max_1, tf.int32)
-    arg_max_2 = tf.cast(arg_max_2, tf.int32)
-    arg_min_1 = tf.cast(arg_min_1, tf.int32)
-    arg_min_2 = tf.cast(arg_min_2, tf.int32)
-
-    x_dim_1 = tf.ones_like(x, dtype=tf.int32)
-    x_dim_2 = tf.ones_like(x, dtype=tf.int32)
-
-    x_dim_1 = tf.math.cumsum(x_dim_1, axis=1) - 1
-    x_dim_2 = tf.math.cumsum(x_dim_2, axis=2) - 1
-
-    arg_max_1 = tf.reshape(arg_max_1, shape=(-1, 1, 1))
-    arg_max_2 = tf.reshape(arg_max_2, shape=(-1, 1, 1))
-    arg_min_1 = tf.reshape(arg_min_1, shape=(-1, 1, 1))
-    arg_min_2 = tf.reshape(arg_min_2, shape=(-1, 1, 1))
-
-    x_dim_1 = (x_dim_1 <= arg_max_1) & (x_dim_1 >= arg_min_1)
-    x_dim_2 = (x_dim_2 <= arg_max_2) & (x_dim_2 >= arg_min_2)
-
-
-    x = x_dim_1 & x_dim_2
-    x = tf.cast(x, tf.int32)
-    return x
-
-
-
-
+    seq = tf.keras.Sequential()
+    seq.add(
+        tf.keras.layers.MaxPool2D(
+            pool_size=3, strides=1, padding="same", name="avg_attention_1")
+    )
+    # seq.add(
+    #     tf.keras.layers.Lambda(lambda x: x * tf.cast(x >=1/20, tf.float32))
+    # )
+    seq.add(
+        tf.keras.layers.Lambda(lambda x: tf.cast(x >= 1/5, tf.float32))
+    )
+    return seq
 
 
 
@@ -557,7 +524,7 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
     # construct output layer
     seg_output_prob, seg_output_raw = final_segmentation_layer(x, n_class=n_class, name=name_segment_prob)
     seg_category = seg_prob_to_category(seg_prob=seg_output_prob, name=name_segment_cat)
-    vin_output_prob = final_vin_layer(seg_output_raw, ori_image=inputs, name=name_vin_prob)
+    vin_output_prob = final_vin_layer(seg_output_raw, seg_output_prob, name=name_vin_prob)
     vin_string = vin_prob_to_string(vin_output_prob, name=name_vin_cat)
 
     # to connect outputs with loss. You need to configure model.compile(loss={<layer_name>: loss_type})
