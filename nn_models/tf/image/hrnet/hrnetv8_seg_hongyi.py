@@ -400,7 +400,7 @@ def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
 #     print("vvv13")
 #     return x
 
-def final_vin_layer(x, x_prob, name="vin_prob"):
+def final_vin_layer(x, x_prob, x_raw, name="vin_prob"):
     N_VIN = 17
     OUTPUT_CHARS = 36
 
@@ -446,7 +446,7 @@ def final_vin_layer(x, x_prob, name="vin_prob"):
         x_prob_ = x_prob[:,:,:,layer_id:layer_id+1]
         mask_ = mask[:,:,:,layer_id:layer_id+1]
         max_ = max_seq(x_prob_)
-        x_ = x_prob_ * mask_ / (max_)
+        x_ = x_raw * mask_ / (max_)
         x_ = seq(x_)
 
         # -- option 1 embedding
@@ -530,7 +530,7 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
     # construct output layer
     seg_output_prob, seg_output_raw = final_segmentation_layer(x, n_class=n_class, name=name_segment_prob)
     seg_category = seg_prob_to_category(seg_prob=seg_output_prob, name=name_segment_cat)
-    vin_output_prob = final_vin_layer(seg_output_raw, seg_output_prob, name=name_vin_prob)
+    vin_output_prob = final_vin_layer(seg_output_raw, seg_output_prob, inputs, name=name_vin_prob)
     vin_string = vin_prob_to_string(vin_output_prob, name=name_vin_cat)
 
     # to connect outputs with loss. You need to configure model.compile(loss={<layer_name>: loss_type})
