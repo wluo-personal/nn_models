@@ -440,7 +440,7 @@ def final_vin_layer(x, x_prob, name="vin_prob"):
 
     for layer_id in range(1, N_VIN+1):
         # x_ = x_prob * attention_score[:,:,:,layer_id-1: layer_id]
-        x_ = mask[:,:,:,layer_id:layer_id+1] * x_prob
+        x_ = mask[:,:,:,layer_id:layer_id+1] * x_prob[:,:,:,layer_id:layer_id+1]
         x_ = seq(x_)
 
         # -- option 1 embedding
@@ -449,9 +449,9 @@ def final_vin_layer(x, x_prob, name="vin_prob"):
         # -- option 2 onehot
         # x_ = concat_layer([x_, onehot[:, layer_id - 1, :]])
         x_ = concat_layer([x_, x_ebd_])
-        x_ = tf.keras.layers.Dropout(0.5)(x_)
+        # x_ = tf.keras.layers.Dropout(0.5)(x_)
         x_ = interaction(x_)
-        x_ = tf.keras.layers.Dropout(0.5)(x_)
+        # x_ = tf.keras.layers.Dropout(0.5)(x_)
         x_ = merge(x_)
 
         concats.append(x_)
