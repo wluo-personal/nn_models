@@ -437,10 +437,16 @@ def final_vin_layer(x, x_prob, name="vin_prob"):
     mask = x_prob > (1 / 20)
     mask = tf.cast(mask, tf.float32)
     # x_prob = x_prob * mask
+    max_seq = tf.keras.Sequential()
+    max_seq.add(tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=1, keepdims=True)))
+    max_seq.add(tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=2, keepdims=True)))
 
     for layer_id in range(1, N_VIN+1):
         # x_ = x_prob * attention_score[:,:,:,layer_id-1: layer_id]
-        x_ = mask[:,:,:,layer_id:layer_id+1] * x_prob[:,:,:,layer_id:layer_id+1]
+        x_prob_ = x_prob[:,:,:,layer_id:layer_id+1]
+        mask_ = mask[:,:,:,layer_id:layer_id+1]
+        max_ = max_seq(x_prob_)
+        x_ = x_prob_ * mask_ / (max_)
         x_ = seq(x_)
 
         # -- option 1 embedding
