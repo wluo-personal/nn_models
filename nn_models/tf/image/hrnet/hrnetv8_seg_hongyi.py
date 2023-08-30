@@ -434,12 +434,13 @@ def final_vin_layer(x, x_prob, x_raw, name="vin_prob"):
     concats = []
     # attention_seq = get_attention_sequencial()
     # attention_score = attention_seq(x_prob[:,:,:,1: N_VIN+1])
-
-    max_x_prob = tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=1, keepdims=True))(x_prob)
+    thred = 1/ 20
+    max_x_prob = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(x, axis=1, keepdims=True))(x_prob)
     # max_ shape is (Batch, 1, 1, 20)
-    max_x_prob = tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=2, keepdims=True))(max_x_prob)
-    x_prob_normalized = x_prob / max_x_prob
-    mask = x_prob_normalized > (1 / 20)
+    max_x_prob = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(x, axis=2, keepdims=True))(max_x_prob)
+    x_prob_normalized = x_prob / max_x_prob * thred
+    x_prob_normalized = tf.keras.layers.Lambda(lambda x: tf.clip_by_value(x, 0.0, 1.0))(x_prob_normalized)
+    mask = x_prob_normalized > thred
     mask = tf.cast(mask, tf.float32)
 
     for layer_id in range(1, N_VIN+1):
