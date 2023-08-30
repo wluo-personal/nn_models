@@ -440,7 +440,7 @@ def final_vin_layer(x, x_prob, x_raw, name="vin_prob"):
     max_x_prob = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(x, axis=2, keepdims=True))(max_x_prob)
     x_prob_normalized = x_prob / max_x_prob * thred
     x_prob_normalized = tf.keras.layers.Lambda(lambda x: tf.clip_by_value(x, 0.0, 1.0))(x_prob_normalized)
-    mask = x_prob_normalized > thred
+    mask = x_prob > thred
     mask = tf.cast(mask, tf.float32)
 
     for layer_id in range(1, N_VIN+1):
