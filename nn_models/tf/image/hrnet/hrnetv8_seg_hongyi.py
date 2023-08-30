@@ -418,9 +418,14 @@ def final_vin_layer(x, x_prob, x_raw, name="vin_prob"):
     ebd = tf.keras.layers.Embedding(input_dim=N_VIN + 2, output_dim=4, input_length=1)
 
     seq = tf.keras.Sequential()
-    for filters in (4, 8, 16):
-        seq.add(tf.keras.layers.Conv2D(
-            filters=filters, kernel_size=3, strides=2,
+    seq.add(tf.keras.layers.Conv2D(
+        filters=16, kernel_size=3, strides=2,
+        use_bias=False, activation=None, padding="same"))
+    seq.add(tf.keras.layers.BatchNormalization(axis=-1))
+    seq.add(tf.keras.layers.Activation("relu"))
+    for filters in (2,1,2,1):
+        seq.add(tf.keras.layers.DepthwiseConv2D(
+            depth_multiplier=filters, kernel_size=3, strides=2,
             use_bias=False, activation=None, padding="same"))
         seq.add(tf.keras.layers.BatchNormalization(axis=-1))
         seq.add(tf.keras.layers.Activation("relu"))
@@ -434,19 +439,18 @@ def final_vin_layer(x, x_prob, x_raw, name="vin_prob"):
     concats = []
     # attention_seq = get_attention_sequencial()
     # attention_score = attention_seq(x_prob[:,:,:,1: N_VIN+1])
-    mask = x_prob > (1 / 20)
+
+    max_x_prob = tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=1, keepdims=True))(x_prob)
+    # max_ shape is (Batch, 1, 1, 20)
+    max_x_prob = tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=2, keepdims=True))(max_x_prob)
+    x_prob_normalized = x_prob / max_x_prob
+    mask = x_prob_normalized > (1 / 20)
     mask = tf.cast(mask, tf.float32)
-    # x_prob = x_prob * mask
-    max_seq = tf.keras.Sequential()
-    max_seq.add(tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=1, keepdims=True)))
-    max_seq.add(tf.keras.layers.Lambda(lambda x: tf.math.reduce_max(x, axis=2, keepdims=True)))
 
     for layer_id in range(1, N_VIN+1):
         # x_ = x_prob * attention_score[:,:,:,layer_id-1: layer_id]
-        x_prob_ = x_prob[:,:,:,layer_id:layer_id+1]
         mask_ = mask[:,:,:,layer_id:layer_id+1]
-        max_ = max_seq(x_prob_)
-        x_ = x_raw * mask_ / (max_)
+        x_ = x_prob_normalized  * mask_
         x_ = seq(x_)
 
         # -- option 1 embedding
