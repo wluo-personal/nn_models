@@ -418,14 +418,9 @@ def final_vin_layer(x, x_prob, x_raw, name="vin_prob"):
     ebd = tf.keras.layers.Embedding(input_dim=N_VIN + 2, output_dim=4, input_length=1)
 
     seq = tf.keras.Sequential()
-    seq.add(tf.keras.layers.Conv2D(
-        filters=16, kernel_size=3, strides=2,
-        use_bias=False, activation=None, padding="same"))
-    seq.add(tf.keras.layers.BatchNormalization(axis=-1))
-    seq.add(tf.keras.layers.Activation("relu"))
-    for filters in (2,1,2,1):
-        seq.add(tf.keras.layers.DepthwiseConv2D(
-            depth_multiplier=filters, kernel_size=3, strides=2,
+    for filters in (8,16,32):
+        seq.add(tf.keras.layers.Conv2D(
+            filters=filters, kernel_size=3, strides=2,
             use_bias=False, activation=None, padding="same"))
         seq.add(tf.keras.layers.BatchNormalization(axis=-1))
         seq.add(tf.keras.layers.Activation("relu"))
@@ -450,7 +445,7 @@ def final_vin_layer(x, x_prob, x_raw, name="vin_prob"):
     for layer_id in range(1, N_VIN+1):
         # x_ = x_prob * attention_score[:,:,:,layer_id-1: layer_id]
         mask_ = mask[:,:,:,layer_id:layer_id+1]
-        x_ = x_prob_normalized  * mask_
+        x_ = x_prob_normalized[:,:,:,layer_id:layer_id+1]  * mask_
         x_ = seq(x_)
 
         # -- option 1 embedding
