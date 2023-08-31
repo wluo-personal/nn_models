@@ -395,12 +395,13 @@ def final_vin_layer(x, name="vin_prob"):
     merge = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)
 
     concats = []
+    x = tf.keras.layers.LayerNormalization(axis=-1)(x)
     for layer_id in range(1, N_VIN+1):
         mask = tf.equal(x_argmax, layer_id)
         mask = bounding_box_calculation(mask)
         mask = tf.cast(mask, tf.float32)
         mask = tf.expand_dims(mask, axis=-1)
-        x_ = x[:,:,:,layer_id:layer_id+1] * mask
+        x_ = x * mask
         x_ = seq(x_)
         x_ = concat_layer([x_, onehot[:,layer_id-1, :]])
         x_ = interaction(x_)
