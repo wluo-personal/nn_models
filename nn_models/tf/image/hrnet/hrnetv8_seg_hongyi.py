@@ -382,7 +382,7 @@ def final_vin_layer(x, name="vin_prob"):
     onehot = tf.one_hot(one_hot_indices, dtype=tf.float32, depth=N_VIN)
 
     seq = tf.keras.Sequential()
-    for filters in (4, 8, 16):
+    for filters in (4, 8, 16, 32, 64):
         seq.add(tf.keras.layers.Conv2D(
             filters=filters, kernel_size=3, strides=2,
             use_bias=False, activation=None, padding="same"))
@@ -395,7 +395,6 @@ def final_vin_layer(x, name="vin_prob"):
     merge = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)
 
     concats = []
-    x = tf.keras.layers.LayerNormalization(axis=-1)(x)
     for layer_id in range(1, N_VIN+1):
         mask = tf.equal(x_argmax, layer_id)
         mask = bounding_box_calculation(mask)
