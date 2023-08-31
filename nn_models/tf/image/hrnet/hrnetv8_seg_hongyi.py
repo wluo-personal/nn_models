@@ -382,7 +382,8 @@ def final_vin_layer(x, name="vin_prob"):
     onehot = tf.one_hot(one_hot_indices, dtype=tf.float32, depth=N_VIN)
 
     seq = tf.keras.Sequential()
-    for filters in (4, 8, 16, 32, 64):
+    seq.add(tf.keras.layers.AvgPool2D(pool_size=(3,3), strides=2))
+    for filters in (4, 8):
         seq.add(tf.keras.layers.Conv2D(
             filters=filters, kernel_size=3, strides=2,
             use_bias=False, activation=None, padding="same"))
@@ -391,7 +392,8 @@ def final_vin_layer(x, name="vin_prob"):
     seq.add(tf.keras.layers.Flatten())
 
     concat_layer = tf.keras.layers.Concatenate()
-    interaction = tf.keras.layers.Dense(128, activation="relu")
+    interaction1 = tf.keras.layers.Dense(128, activation="relu")
+    interaction2 = tf.keras.layers.Dense(OUTPUT_CHARS, activation="relu")
     merge = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)
 
     concats = []
@@ -403,7 +405,8 @@ def final_vin_layer(x, name="vin_prob"):
         x_ = x * mask
         x_ = seq(x_)
         x_ = concat_layer([x_, onehot[:,layer_id-1, :]])
-        x_ = interaction(x_)
+        x_ = interaction1(x_)
+        x_ = interaction2(x_)
         x_ = merge(x_)
 
         concats.append(x_)
