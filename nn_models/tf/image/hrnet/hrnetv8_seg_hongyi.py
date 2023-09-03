@@ -367,6 +367,38 @@ def final_segmentation_layer(x, n_class, base_filters=BASE_BRANCH_FILTERS,
     x = tf.keras.layers.Softmax(axis=-1, name=name)(raw)
     return x, raw
 
+# def final_vin_layer(x, name="vin_prob"):
+#     N_VIN = 17
+#     OUTPUT_CHARS = 36
+#     x = base_cba(x, 64, kernel_size=3, strides=2, activation="relu")
+#     x = base_cba(x, 128, kernel_size=3, strides=2, activation="relu")
+#     x = base_cba(x, 256, kernel_size=3, strides=2, activation="relu")
+#     x = base_cba(x, 512, kernel_size=3, strides=2, activation="relu")
+#     x = tf.keras.layers.GlobalMaxPooling2D()(x)
+#     ebd = tf.keras.layers.Embedding(input_dim=N_VIN + 1, output_dim=3, input_length=1)
+#
+#     merge1 = tf.keras.layers.Dense(128, activation="relu")
+#     merge2 = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)
+#     flatten = tf.keras.layers.Flatten()
+#     concat = tf.keras.layers.Concatenate()
+#
+#     token = tf.zeros_like(x)[:, :1]
+#     concats = []
+#     for layer_id in range(0, N_VIN):
+#         x_ebd_ = ebd(tf.cast(token + layer_id, tf.int32))
+#         x_ebd_ = flatten(x_ebd_)
+#         x_ = concat([x, x_ebd_])
+#         # x_ = tf.keras.layers.Dropout(0.5)(x_)
+#         x_ = merge1(x_)
+#         # x_ = tf.keras.layers.Dropout(0.5)(x_)
+#         x_ = merge2(x_)
+#         concats.append(x_)
+#
+#     x = tf.stack(concats, axis=1)
+#     x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
+#
+#     print("vvv13")
+#     return x
 
 def final_vin_layer(x, name="vin_prob"):
     N_VIN = 17
@@ -382,8 +414,7 @@ def final_vin_layer(x, name="vin_prob"):
     onehot = tf.one_hot(one_hot_indices, dtype=tf.float32, depth=N_VIN)
 
     seq = tf.keras.Sequential()
-    seq.add(tf.keras.layers.AvgPool2D(pool_size=(3,3), strides=2))
-    for filters in (4, 8):
+    for filters in (4, 8, 16):
         seq.add(tf.keras.layers.Conv2D(
             filters=filters, kernel_size=3, strides=2,
             use_bias=False, activation=None, padding="same"))
@@ -392,8 +423,7 @@ def final_vin_layer(x, name="vin_prob"):
     seq.add(tf.keras.layers.Flatten())
 
     concat_layer = tf.keras.layers.Concatenate()
-    interaction1 = tf.keras.layers.Dense(128, activation="relu")
-    interaction2 = tf.keras.layers.Dense(OUTPUT_CHARS, activation="relu")
+    interaction = tf.keras.layers.Dense(128, activation="relu")
     merge = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)
 
     concats = []
@@ -405,15 +435,14 @@ def final_vin_layer(x, name="vin_prob"):
         x_ = x * mask
         x_ = seq(x_)
         x_ = concat_layer([x_, onehot[:,layer_id-1, :]])
-        x_ = interaction1(x_)
-        x_ = interaction2(x_)
+        x_ = interaction(x_)
         x_ = merge(x_)
 
         concats.append(x_)
     x = tf.stack(concats, axis=1)
     x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
 
-    print("vvv21")
+    print("vvv17")
     return x
 
 
