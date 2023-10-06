@@ -1,5 +1,6 @@
 """
-This is working on the patch. The output will be binary classification.
+Copy from v6
+Use segment raw output as intput
 """
 
 """
@@ -12,11 +13,25 @@ import tensorflow as tf
 import string
 from nn_models.tf.image.hrnet.mobile_inception import (base_block, base_cba)
 
-N_FILTERS_STEM_NET = 64
+#### ori value
+# N_FILTERS_STEM_NET = 64
+# N_BOTTLENECK_LAYERS_IN_STEM = 3  # any non-negative integer is valid
+#
+# # The main branch number of filters. The sub-branch will be this * 2
+# BASE_BRANCH_FILTERS = 32
+#
+# # number of block in a branch
+# N_BLOCKS_PER_BRANCH = 4  # integer greater than 0. Orignal value is 4
+#
+# # whether to use Con2Dtranspose to do upsampling
+# BOOL_UPSAMPLE_TRANSPOSE = True
+
+##### overide
+N_FILTERS_STEM_NET = 32
 N_BOTTLENECK_LAYERS_IN_STEM = 3  # any non-negative integer is valid
 
 # The main branch number of filters. The sub-branch will be this * 2
-BASE_BRANCH_FILTERS = 32
+BASE_BRANCH_FILTERS = 16
 
 # number of block in a branch
 N_BLOCKS_PER_BRANCH = 4  # integer greater than 0. Orignal value is 4
@@ -27,7 +42,7 @@ BOOL_UPSAMPLE_TRANSPOSE = True
 
 class ModelHyperParams:
     @staticmethod
-    def set_n_filters_STEM_NET(value: int = 64):
+    def set_n_filters_STEM_NET(value: int = 32):
         global N_FILTERS_STEM_NET
         N_FILTERS_STEM_NET = value
 
@@ -37,17 +52,17 @@ class ModelHyperParams:
         N_BOTTLENECK_LAYERS_IN_STEM = value
 
     @staticmethod
-    def set_base_branch_filters(value: int = 32):
+    def set_base_branch_filters(value: int = 16):
         global BASE_BRANCH_FILTERS
         BASE_BRANCH_FILTERS = value
 
     @staticmethod
-    def set_n_blocks_per_branch(value: int = 32):
+    def set_n_blocks_per_branch(value: int = 4):
         global N_BLOCKS_PER_BRANCH
         N_BLOCKS_PER_BRANCH = value
 
     @staticmethod
-    def set_bool_upsamle_transpose(value: bool = False):
+    def set_bool_upsamle_transpose(value: bool = True):
         global BOOL_UPSAMPLE_TRANSPOSE
         BOOL_UPSAMPLE_TRANSPOSE = value
 
@@ -192,7 +207,7 @@ def stem_net(inputs, out_filters=N_FILTERS_STEM_NET, n_bottleneck_layers=N_BOTTL
         inputs=inputs,
         out_filters=out_filters,
         kernel_size=3,
-        strides=(1, 1),
+        strides=(2, 2),
         bool_batchnorm=True,
         bool_activation=True)
 
@@ -348,123 +363,25 @@ def make_layer_branches(x: tuple, base_filters=BASE_BRANCH_FILTERS, n_blocks=N_B
     return outs
 
 
-def final_segmentation_layer(x, name="segment_prob"):
+def final_segmentation_layer(x,
+                             base_filters=BASE_BRANCH_FILTERS,
+                             bool_upsample_transpose=BOOL_UPSAMPLE_TRANSPOSE,
+                             name="segment_prob"):
+    # since originally it is scaled down by 2,2. Upscale by 2*2 to original image size
+    size = (2, 2)
+    if bool_upsample_transpose:
+        x = tf.keras.layers.Conv2DTranspose(
+            base_filters//2, kernel_size=size, strides=size, padding="same", use_bias=False)(x)
+        x = tf.keras.layers.BatchNormalization(axis=3)(x)
+        x = tf.keras.layers.Activation("relu")(x)
+    else:
+        x = tf.keras.layers.UpSampling2D(size=(2, 2))(x)
 
-
-    x = tf.keras.layers.Conv2D(1, 1, use_bias=False, kernel_initializer='he_normal')(x)
+    x = tf.keras.layers.Conv2D(1, 1, use_bias=False, kernel_initializer='he_normal')(x)[:,:,:,0]
+    # raw = tf.keras.layers.BatchNormalization(axis=3)(x)
     x = tf.keras.layers.Activation("sigmoid", name=name)(x)
     return x
 
-
-def final_vin_layer(x, name="vin_prob"):
-    N_VIN = 17
-    OUTPUT_CHARS = 36
-
-    x_argmax = tf.keras.layers.Lambda(lambda x: tf.math.argmax(x, axis=-1), dtype=tf.int32)(x)
-
-    ones = tf.ones_like(x_argmax, dtype=tf.int32)[:, :1, 0]
-    ones = tf.repeat(ones, N_VIN, axis=1)
-    # batch * N_VIN
-    one_hot_indices = tf.range(0, N_VIN) * ones
-    # batch * N_VIN(depth) * N_VIN
-    onehot = tf.one_hot(one_hot_indices, dtype=tf.float32, depth=N_VIN)
-
-    seq = tf.keras.Sequential()
-    for filters in (4, 8, 16):
-        seq.add(tf.keras.layers.Conv2D(
-            filters=filters, kernel_size=3, strides=2,
-            use_bias=False, activation=None, padding="same"))
-        seq.add(tf.keras.layers.BatchNormalization(axis=-1))
-        seq.add(tf.keras.layers.Activation("relu"))
-    seq.add(tf.keras.layers.Flatten())
-
-    concat_layer = tf.keras.layers.Concatenate()
-    interaction = tf.keras.layers.Dense(128, activation="relu")
-    merge = tf.keras.layers.Dense(OUTPUT_CHARS, activation=None)
-
-    concats = []
-    for layer_id in range(1, N_VIN+1):
-        mask = tf.equal(x_argmax, layer_id)
-        mask = bounding_box_calculation(mask)
-        mask = tf.cast(mask, tf.float32)
-        mask = tf.expand_dims(mask, axis=-1)
-        x_ = x * mask
-        # x_ = tf.stop_gradient(x_)
-        x_ = seq(x_)
-        x_ = concat_layer([x_, onehot[:,layer_id-1, :]])
-        x_ = interaction(x_)
-        x_ = merge(x_)
-
-        concats.append(x_)
-    x = tf.stack(concats, axis=1)
-    x = tf.keras.layers.Softmax(axis=-1, name=name)(x)
-
-    print("vvv17")
-    return x
-
-
-def bounding_box_calculation(x):
-    """
-
-    :param x: (batch, x, y), bool value in each entry
-    :return:
-    """
-    # x1, x2 is the mask
-    x1 = tf.math.reduce_any(x, axis=2)
-    x2 = tf.math.reduce_any(x, axis=1)
-    x1 = tf.cast(x1, tf.int32)
-    x2 = tf.cast(x2, tf.int32)
-    indice1 = tf.ones_like(x1, dtype=tf.int32)
-    indice2 = tf.ones_like(x2, dtype=tf.int32)
-    indice1 = tf.math.cumsum(indice1, axis=-1) - 1
-    indice2 = tf.math.cumsum(indice2, axis=-1) - 1
-    indice1_rev = indice1[:, ::-1]
-    indice2_rev = indice2[:, ::-1]
-
-    arg_max_1 = tf.math.argmax(indice1 * x1, axis=-1)
-    arg_max_2 = tf.math.argmax(indice2 * x2, axis=-1)
-    # x1, 2 cannot be reverse to calculate the min
-    arg_min_1 = tf.math.argmax(indice1_rev * x1, axis=-1)
-    arg_min_2 = tf.math.argmax(indice2_rev * x2, axis=-1)
-
-
-    # convert type
-    arg_max_1 = tf.cast(arg_max_1, tf.int32)
-    arg_max_2 = tf.cast(arg_max_2, tf.int32)
-    arg_min_1 = tf.cast(arg_min_1, tf.int32)
-    arg_min_2 = tf.cast(arg_min_2, tf.int32)
-
-    x_dim_1 = tf.ones_like(x, dtype=tf.int32)
-    x_dim_2 = tf.ones_like(x, dtype=tf.int32)
-
-    x_dim_1 = tf.math.cumsum(x_dim_1, axis=1) - 1
-    x_dim_2 = tf.math.cumsum(x_dim_2, axis=2) - 1
-
-    arg_max_1 = tf.reshape(arg_max_1, shape=(-1, 1, 1))
-    arg_max_2 = tf.reshape(arg_max_2, shape=(-1, 1, 1))
-    arg_min_1 = tf.reshape(arg_min_1, shape=(-1, 1, 1))
-    arg_min_2 = tf.reshape(arg_min_2, shape=(-1, 1, 1))
-
-    x_dim_1 = (x_dim_1 <= arg_max_1) & (x_dim_1 >= arg_min_1)
-    x_dim_2 = (x_dim_2 <= arg_max_2) & (x_dim_2 >= arg_min_2)
-
-
-    x = x_dim_1 & x_dim_2
-    x = tf.cast(x, tf.int32)
-    return x
-
-
-
-
-
-
-
-def seg_prob_to_category(seg_prob, name="segment_category"):
-    return tf.keras.layers.Lambda(lambda x: tf.math.argmax(x, axis=-1), name=name)(seg_prob)
-
-def vin_prob_to_string(vin_prob, name="vin_category"):
-    vin_category = tf.keras.layers.Lambda(lambda x: tf.math.argmax(x, axis=-1), name=name)(vin_prob)
-    return vin_category
 
 
 def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
@@ -499,7 +416,7 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
 
 
     # to connect outputs with loss. You need to configure model.compile(loss={<layer_name>: loss_type})
-    model = tf.keras.Model(inputs = inputs,
+    model = tf.keras.Model(inputs=inputs,
                            outputs = seg_output_prob,
                            )
 
