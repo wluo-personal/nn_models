@@ -401,9 +401,21 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=37):
             x = construct_fuse_layers(x)
     # construct output layer
 
-    x = conv_block(inputs=x, out_filters=OUT_FILTERS, strides=(2, 2),
+    # x = conv_block(inputs=x, out_filters=OUT_FILTERS, strides=(2, 2),
+    #                 kernel_size=3, bool_batchnorm=True, bool_activation=True)
+    # x = tf.keras.layers.GlobalAveragePooling2D()(x)
+
+    out_filters = BASE_BRANCH_FILTERS * (2 ** n_splits)
+    x = conv_block(inputs=x, out_filters=out_filters * 2, strides=(2, 2),
                     kernel_size=3, bool_batchnorm=True, bool_activation=True)
-    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x = conv_block(inputs=x, out_filters=out_filters * 4, strides=(2, 2),
+                   kernel_size=3, bool_batchnorm=True, bool_activation=True)
+    x = conv_block(inputs=x, out_filters=out_filters * 8, strides=(2, 2),
+                   kernel_size=3, bool_batchnorm=True, bool_activation=True)
+    x = tf.keras.layers.Flatten()(x)
+
+
+
     x = tf.keras.layers.Dense(n_class)(x)
     out = tf.keras.layers.Softmax(name=char_prob)(x)
 
