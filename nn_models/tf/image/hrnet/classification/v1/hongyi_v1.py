@@ -39,7 +39,7 @@ N_BLOCKS_PER_BRANCH = 4  # integer greater than 0. Orignal value is 4
 # whether to use Con2Dtranspose to do upsampling
 BOOL_UPSAMPLE_TRANSPOSE = True
 
-OUT_FILTERS = 1024
+OUT_FILTERS = 512
 
 
 class ModelHyperParams:
@@ -112,7 +112,9 @@ def conv_block(inputs, out_filters, kernel_size=3, strides=(1, 1), bool_batchnor
         padding='same',
         strides=strides,
         use_bias=False,  # on large dataset, no need to enable bias
-        kernel_initializer='he_normal')(inputs)
+        # kernel_initializer="glorot_uniform",
+        kernel_initializer='he_normal'
+    )(inputs)
     if bool_batchnorm:
         x = tf.keras.layers.BatchNormalization(axis=3)(x)
     if bool_activation:
@@ -401,18 +403,19 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=37):
             x = construct_fuse_layers(x)
     # construct output layer
 
-    # x = conv_block(inputs=x, out_filters=OUT_FILTERS, strides=(2, 2),
-    #                 kernel_size=3, bool_batchnorm=True, bool_activation=True)
-    # x = tf.keras.layers.GlobalAveragePooling2D()(x)
-
-    out_filters = BASE_BRANCH_FILTERS * (2 ** n_splits)
-    x = conv_block(inputs=x, out_filters=out_filters * 2, strides=(2, 2),
+    x = conv_block(inputs=x, out_filters=OUT_FILTERS, strides=(2, 2),
                     kernel_size=3, bool_batchnorm=True, bool_activation=True)
-    x = conv_block(inputs=x, out_filters=out_filters * 4, strides=(2, 2),
-                   kernel_size=3, bool_batchnorm=True, bool_activation=True)
-    x = conv_block(inputs=x, out_filters=out_filters * 8, strides=(2, 2),
-                   kernel_size=3, bool_batchnorm=True, bool_activation=True)
-    x = tf.keras.layers.Flatten()(x)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x = tf.keras.layers.Dropout(0.5)(x)
+
+    # out_filters = BASE_BRANCH_FILTERS * (2 ** n_splits)
+    # x = conv_block(inputs=x, out_filters=out_filters * 2, strides=(2, 2),
+    #                 kernel_size=3, bool_batchnorm=True, bool_activation=True)
+    # x = conv_block(inputs=x, out_filters=out_filters * 4, strides=(2, 2),
+    #                kernel_size=3, bool_batchnorm=True, bool_activation=True)
+    # x = conv_block(inputs=x, out_filters=out_filters * 8, strides=(2, 2),
+    #                kernel_size=3, bool_batchnorm=True, bool_activation=True)
+    # x = tf.keras.layers.Flatten()(x)
 
 
 
@@ -429,3 +432,5 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=37):
     return model
 
 # TODO 1. for each layer get the mask and then feed into the same recognition layer
+
+tf.keras.layers.MultiHeadAttention
