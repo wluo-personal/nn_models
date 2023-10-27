@@ -1,5 +1,13 @@
 """
-This version only has segmentation output, the final segmentation only distinguish background VS characters (sigmoid)
+This version has
+
+segment_prob
+1. segmentation output
+    segment_prob (batch, img_height, img_shape)
+2. 20 categories h_min, h_max, w_min, w_max
+    batch, 20, 4
+3. vin_prob: 17 sequence of integers
+    batch, 17
 """
 
 """
