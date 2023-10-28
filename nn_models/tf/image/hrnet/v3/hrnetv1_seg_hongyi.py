@@ -471,7 +471,8 @@ def get_final_position_v2(segment_preds, img_height, img_width, n_class=20):
     return edges_normalized
 
 
-def final_position_and_classification(segment_preds, img_height, img_width, n_class=20):
+def final_position_and_classification(segment_preds, img_height, img_width, n_class=20, base_filters=BASE_BRANCH_FILTERS):
+    name_vin = "vin_prob"
     # h_min_float, h_max_float, w_min_float, w_max_float
     edges_normalized = get_final_position_v2(segment_preds, img_height, img_width, n_class=n_class)
     bounding_boxes = tf.stack(
@@ -488,14 +489,43 @@ def final_position_and_classification(segment_preds, img_height, img_width, n_cl
         mask = tf.image.draw_bounding_boxes(
             bimage, boxes, colors=[[1]], name=None
         )
-        mask = tf.squeeze(mask)
+        mask = tf.squeeze(mask, axis=-1)
         mask1 = tf.math.cumsum(mask, axis=1, reverse=False)
+
         mask2 = tf.math.cumsum(mask, axis=1, reverse=True)
         mask3 = tf.math.cumsum(mask, axis=2, reverse=False)
         mask4 = tf.math.cumsum(mask, axis=2, reverse=True)
         mask = mask1 * mask2 * mask3 * mask4
         mask = tf.cast(mask > 0, tf.float32)
+        # shape is (batch, height, width)
         return mask
+
+    name_position = "position"
+    seq = tf.keras.Sequential()
+    for filters in (base_filters , base_filters * 2, base_filters * 4):
+        seq.add(tf.keras.layers.Conv2D(filters, 3, padding='valid', strides=2, use_bias=False,
+                                       # on large dataset, no need to enable bias
+                                       kernel_initializer='he_normal')
+                )
+        seq.add(tf.keras.layers.BatchNormalization(axis=-1))
+        seq.add(tf.keras.layers.Activation('relu'))
+    seq.add(tf.keras.layers.GlobalAveragePooling2D())
+    seq.add(tf.keras.layers.Dense(36, activation="softmax"))
+
+
+
+
+    concats = []
+    for loc in range(1, 18):
+        attn_mask = get_attention_mask_loc(loc)
+        preds = segment_preds[:,:,:,loc]
+        preds = preds * attn_mask
+        preds = preds[:,:,:,tf.newaxis]
+        print("preds", preds.shape)
+        concats.append(seq(preds))
+    out_vin = tf.stack(concats, axis=1, name=name_vin)
+    return edges_normalized, out_vin
+
 
 
 
@@ -531,13 +561,19 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
     # seg_output_prob shape is (batch, img_height, img_width, n_class)
     seg_output_prob = final_segmentation_layer(x, name=name_segment_prob, n_class=n_class)
     # position_output = get_final_position(seg_output_prob, n_class=n_class)
-    _, position_output = get_final_position_v2(seg_output_prob, img_height=image_shape[0], img_width=image_shape[1],
-                                               n_class=n_class)
+    # _, position_output = get_final_position_v2(seg_output_prob, img_height=image_shape[0], img_width=image_shape[1],
+    #                                            n_class=n_class)
+
+    position_output, prob_vin = final_position_and_classification(
+        seg_output_prob,
+        img_height=image_shape[0],
+        img_width=image_shape[1],
+        n_class=n_class)
 
 
     # to connect outputs with loss. You need to configure model.compile(loss={<layer_name>: loss_type})
     model = tf.keras.Model(inputs=inputs,
-                           outputs = [seg_output_prob, position_output],
+                           outputs = [seg_output_prob, position_output, prob_vin],
                            )
 
 
