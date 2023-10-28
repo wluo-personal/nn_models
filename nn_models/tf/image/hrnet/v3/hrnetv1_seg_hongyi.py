@@ -387,7 +387,7 @@ def final_segmentation_layer(x,
 
     x = tf.keras.layers.Conv2D(n_class, 1, use_bias=False, kernel_initializer='he_normal')(x)
     x = tf.keras.layers.BatchNormalization(axis=-1)(x)
-    x = tf.keras.layers.Activation("sigmoid", name=name)(x)
+    x = tf.keras.layers.Activation("softmax", name=name)(x)
     return x
 
 def get_loc_res(x, loc=0):
@@ -466,7 +466,7 @@ def get_final_position_v2(segment_preds, img_height, img_width, n_class=20):
         edges_normalized.append(edge_normalized)
 
     edges_normalized[0] = tf.zeros_like(edges_normalized[-1], dtype=tf.float32)
-    edges_normalized = tf.stack(edges_normalized, axis=1, name=name_position)
+    edges_normalized = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=1), name=name_position)(edges_normalized)
 
     return edges_normalized
 
@@ -521,9 +521,8 @@ def final_position_and_classification(segment_preds, img_height, img_width, n_cl
         preds = segment_preds[:,:,:,loc]
         preds = preds * attn_mask
         preds = preds[:,:,:,tf.newaxis]
-        print("preds", preds.shape)
         concats.append(seq(preds))
-    out_vin = tf.stack(concats, axis=1, name=name_vin)
+    out_vin = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=1), name=name_vin)(concats)
     return edges_normalized, out_vin
 
 
@@ -573,7 +572,10 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
 
     # to connect outputs with loss. You need to configure model.compile(loss={<layer_name>: loss_type})
     model = tf.keras.Model(inputs=inputs,
-                           outputs = [seg_output_prob, position_output, prob_vin],
+                           outputs = [
+                               seg_output_prob,
+                               position_output, prob_vin
+                           ],
                            )
 
 
