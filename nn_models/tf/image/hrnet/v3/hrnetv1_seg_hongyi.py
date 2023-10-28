@@ -38,7 +38,7 @@ N_FILTERS_STEM_NET = 32
 N_BOTTLENECK_LAYERS_IN_STEM = 3  # any non-negative integer is valid
 
 # The main branch number of filters. The sub-branch will be this * 2
-BASE_BRANCH_FILTERS = 16
+BASE_BRANCH_FILTERS = 32
 
 # number of block in a branch
 N_BLOCKS_PER_BRANCH = 4  # integer greater than 0. Orignal value is 4
@@ -373,21 +373,130 @@ def make_layer_branches(x: tuple, base_filters=BASE_BRANCH_FILTERS, n_blocks=N_B
 def final_segmentation_layer(x,
                              base_filters=BASE_BRANCH_FILTERS,
                              bool_upsample_transpose=BOOL_UPSAMPLE_TRANSPOSE,
-                             name="segment_prob"):
+                             name="segment_prob",
+                             n_class=20):
     # since originally it is scaled down by 2,2. Upscale by 2*2 to original image size
     size = (2, 2)
     if bool_upsample_transpose:
         x = tf.keras.layers.Conv2DTranspose(
-            base_filters//2, kernel_size=size, strides=size, padding="same", use_bias=False)(x)
+            base_filters, kernel_size=size, strides=size, padding="same", use_bias=False)(x)
         x = tf.keras.layers.BatchNormalization(axis=3)(x)
         x = tf.keras.layers.Activation("relu")(x)
     else:
         x = tf.keras.layers.UpSampling2D(size=(2, 2))(x)
 
-    x = tf.keras.layers.Conv2D(1, 1, use_bias=False, kernel_initializer='he_normal')(x)[:,:,:,0]
-    # raw = tf.keras.layers.BatchNormalization(axis=3)(x)
+    x = tf.keras.layers.Conv2D(n_class, 1, use_bias=False, kernel_initializer='he_normal')(x)
+    x = tf.keras.layers.BatchNormalization(axis=-1)(x)
     x = tf.keras.layers.Activation("sigmoid", name=name)(x)
     return x
+
+def get_loc_res(x, loc=0):
+    x = x[:,:,:,loc]
+
+
+
+def get_final_position(x, n_class=20, base_filters=BASE_BRANCH_FILTERS,):
+    ### v1 -- prediction
+    name_position = "position"
+    seq = tf.keras.Sequential()
+    seq.add(tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, axis=-1)))
+    for filters in (base_filters // 2, base_filters, base_filters*2):
+        seq.add(tf.keras.layers.Conv2D(filters, 3, padding='valid', strides=2, use_bias=False,  # on large dataset, no need to enable bias
+                kernel_initializer='he_normal')
+                )
+        seq.add(tf.keras.layers.BatchNormalization(axis=-1))
+        seq.add(tf.keras.layers.Activation('relu'))
+    seq.add(tf.keras.layers.GlobalAveragePooling2D())
+    seq.add(tf.keras.layers.Dense(4, activation=None))
+    seq.add(tf.keras.layers.Lambda(lambda x: tf.clip_by_value(x, 0.0, 1.0)))
+    concats = []
+    for loc in range(n_class):
+        x_loc = x[:,:,:,loc]
+        concats.append(seq(x_loc))
+    out = tf.stack(concats, axis=1, name=name_position)
+    return out
+
+
+
+def get_final_position_v2(segment_preds, img_height, img_width, n_class=20):
+    ### v2 -- get the value from preds
+
+    def get_indices_metrices():
+        ones = tf.ones_like(segment_category, dtype=tf.int32)
+        # dim -1 is the width dim; dim -2 is the height dim
+        ones_for_height = ones[:, :, 0]
+        ones_for_width = ones[:, 0, :]
+        indices_height_max = tf.cumsum(ones_for_height, axis=-1)
+        indices_height_min = tf.cumsum(ones_for_height, axis=-1, reverse=True)
+        indices_width_max = tf.cumsum(ones_for_width, axis=-1)
+        indices_width_min = tf.cumsum(ones_for_width, axis=-1, reverse=True)
+        return indices_height_min, indices_height_max, indices_width_min, indices_width_max
+
+    def process_each_loc(loc):
+        mask = segment_category == loc
+        mask_bool_width = tf.cast(tf.reduce_any(mask, axis=-2), tf.int32)
+        mask_bool_height = tf.cast(tf.reduce_any(mask, axis=-1), tf.int32)
+
+        # if all zeros the argmax will return indices 0
+        h_min = tf.argmax(mask_bool_height * indices_height_min, axis=-1)
+        h_max = tf.argmax(mask_bool_height * indices_height_max, axis=-1)
+        w_min = tf.argmax(mask_bool_width * indices_width_min, axis=-1)
+        w_max = tf.argmax(mask_bool_width * indices_width_max, axis=-1)
+
+        h_max_float = tf.cast(h_max, tf.float32)
+        h_min_float = tf.cast(h_min, tf.float32)
+        w_max_float = tf.cast(w_max, tf.float32)
+        w_min_float = tf.cast(w_min, tf.float32)
+
+        h_max_float = h_max_float / img_height
+        h_min_float = h_min_float / img_height
+        w_max_float = w_max_float / img_width
+        w_min_float = w_min_float / img_width
+        return tf.stack([h_min_float, h_max_float, w_min_float, w_max_float], axis=-1)
+
+
+    name_position = "position"
+    segment_category = tf.argmax(segment_preds, axis=-1, output_type=tf.int32)
+    # segment_category = tf.squeeze(segment_category)
+    indices_height_min, indices_height_max, indices_width_min, indices_width_max = get_indices_metrices()
+
+    edges_normalized = [None]
+    for loc in range(1, n_class):
+        edge_normalized = process_each_loc(loc)
+        edges_normalized.append(edge_normalized)
+
+    edges_normalized[0] = tf.zeros_like(edges_normalized[-1], dtype=tf.float32)
+    edges_normalized = tf.stack(edges_normalized, axis=1, name=name_position)
+
+    return edges_normalized
+
+
+def final_position_and_classification(segment_preds, img_height, img_width, n_class=20):
+    # h_min_float, h_max_float, w_min_float, w_max_float
+    edges_normalized = get_final_position_v2(segment_preds, img_height, img_width, n_class=n_class)
+    bounding_boxes = tf.stack(
+        [edges_normalized[:,:,0],
+         edges_normalized[:,:,2],
+         edges_normalized[:,:,1],
+         edges_normalized[:,:,3]],
+        axis=-1
+    )
+    bimage = tf.zeros_like(segment_preds[:,:,:,:1])
+
+    def get_attention_mask_loc(loc):
+        boxes = bounding_boxes[:,loc:loc+1,:]
+        mask = tf.image.draw_bounding_boxes(
+            bimage, boxes, colors=[[1]], name=None
+        )
+        mask = tf.squeeze(mask)
+        mask1 = tf.math.cumsum(mask, axis=1, reverse=False)
+        mask2 = tf.math.cumsum(mask, axis=1, reverse=True)
+        mask3 = tf.math.cumsum(mask, axis=2, reverse=False)
+        mask4 = tf.math.cumsum(mask, axis=2, reverse=True)
+        mask = mask1 * mask2 * mask3 * mask4
+        mask = tf.cast(mask > 0, tf.float32)
+        return mask
+
 
 
 
@@ -419,12 +528,16 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
         else:
             x = construct_fuse_layers(x)
     # construct output layer
-    seg_output_prob = final_segmentation_layer(x, name=name_segment_prob)
+    # seg_output_prob shape is (batch, img_height, img_width, n_class)
+    seg_output_prob = final_segmentation_layer(x, name=name_segment_prob, n_class=n_class)
+    # position_output = get_final_position(seg_output_prob, n_class=n_class)
+    _, position_output = get_final_position_v2(seg_output_prob, img_height=image_shape[0], img_width=image_shape[1],
+                                               n_class=n_class)
 
 
     # to connect outputs with loss. You need to configure model.compile(loss={<layer_name>: loss_type})
     model = tf.keras.Model(inputs=inputs,
-                           outputs = seg_output_prob,
+                           outputs = [seg_output_prob, position_output],
                            )
 
 
