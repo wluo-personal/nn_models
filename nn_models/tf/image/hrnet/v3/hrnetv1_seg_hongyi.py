@@ -397,7 +397,7 @@ def get_loc_res(x, loc=0):
 
 def get_final_position(x, n_class=20, base_filters=BASE_BRANCH_FILTERS,):
     ### v1 -- prediction
-    name_position = "position"
+    name_position = "position_1"
     seq = tf.keras.Sequential()
     seq.add(tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, axis=-1)))
     for filters in (base_filters // 2, base_filters, base_filters*2):
@@ -409,12 +409,19 @@ def get_final_position(x, n_class=20, base_filters=BASE_BRANCH_FILTERS,):
     seq.add(tf.keras.layers.GlobalAveragePooling2D())
     seq.add(tf.keras.layers.Dense(4, activation=None))
     seq.add(tf.keras.layers.Lambda(lambda x: tf.clip_by_value(x, 0.0, 1.0)))
-    concats = []
-    for loc in range(n_class):
+    concats = [None]
+    for loc in range(1, n_class):
         x_loc = x[:,:,:,loc]
         concats.append(seq(x_loc))
-    out = tf.stack(concats, axis=1, name=name_position)
+    zeros = tf.zeros_like(concats[-1], dtype=tf.float32)
+    concats[0] = zeros
+    out = tf.stack(concats, axis=1)
+    h_max = tf.math.maximum(out[:,:,0], out[:,:,1])
+    w_max = tf.math.maximum(out[:, :, 2], out[:, :, 3])
+    out = tf.keras.layers.Lambda(lambda x:  tf.stack(x, axis=-1), name=name_position)(
+        [out[:,:,0], h_max, out[:,:,2], w_max])
     return out
+
 
 
 
@@ -471,15 +478,19 @@ def get_final_position_v2(segment_preds, img_height, img_width, n_class=20):
     return edges_normalized
 
 
+
+
 def final_position_and_classification(segment_preds, img_height, img_width, n_class=20, base_filters=BASE_BRANCH_FILTERS):
     name_vin = "vin_prob"
     # h_min_float, h_max_float, w_min_float, w_max_float
     edges_normalized = get_final_position_v2(segment_preds, img_height, img_width, n_class=n_class)
+    edges_normalized_preds = get_final_position(segment_preds, n_class, base_filters)
+    bounding_boxes_edges = edges_normalized_preds
     bounding_boxes = tf.stack(
-        [edges_normalized[:,:,0],
-         edges_normalized[:,:,2],
-         edges_normalized[:,:,1],
-         edges_normalized[:,:,3]],
+        [bounding_boxes_edges[:,:,0],
+         bounding_boxes_edges[:,:,2],
+         bounding_boxes_edges[:,:,1],
+         bounding_boxes_edges[:,:,3]],
         axis=-1
     )
     bimage = tf.zeros_like(segment_preds[:,:,:,:1])
@@ -523,7 +534,7 @@ def final_position_and_classification(segment_preds, img_height, img_width, n_cl
         preds = preds[:,:,:,tf.newaxis]
         concats.append(seq(preds))
     out_vin = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=1), name=name_vin)(concats)
-    return edges_normalized, out_vin
+    return edges_normalized, out_vin, edges_normalized_preds
 
 
 
@@ -563,7 +574,7 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
     # _, position_output = get_final_position_v2(seg_output_prob, img_height=image_shape[0], img_width=image_shape[1],
     #                                            n_class=n_class)
 
-    position_output, prob_vin = final_position_and_classification(
+    position_output, prob_vin, position_output_preds = final_position_and_classification(
         seg_output_prob,
         img_height=image_shape[0],
         img_width=image_shape[1],
@@ -574,11 +585,14 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
     model = tf.keras.Model(inputs=inputs,
                            outputs = [
                                seg_output_prob,
-                               position_output, prob_vin
+                               position_output,
+                               position_output_preds,
+                               prob_vin
                            ],
                            )
 
 
     return model
 
-# TODO 1. for each layer get the mask and then feed into the same recognition layer
+# TODO 1. vin recog add positional encoding ? maybe it is not the best solution
+# TODO 2. regression use predition instead of get the info from segmentation
