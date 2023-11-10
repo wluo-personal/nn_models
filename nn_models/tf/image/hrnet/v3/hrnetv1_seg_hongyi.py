@@ -34,7 +34,7 @@ from nn_models.tf.image.hrnet.mobile_inception import (base_block, base_cba)
 # BOOL_UPSAMPLE_TRANSPOSE = True
 
 ##### overide
-N_FILTERS_STEM_NET = 32
+N_FILTERS_STEM_NET = 64
 N_BOTTLENECK_LAYERS_IN_STEM = 3  # any non-negative integer is valid
 
 # The main branch number of filters. The sub-branch will be this * 2
@@ -49,7 +49,7 @@ BOOL_UPSAMPLE_TRANSPOSE = True
 
 class ModelHyperParams:
     @staticmethod
-    def set_n_filters_STEM_NET(value: int = 32):
+    def set_n_filters_STEM_NET(value: int = 64):
         global N_FILTERS_STEM_NET
         N_FILTERS_STEM_NET = value
 
@@ -59,7 +59,7 @@ class ModelHyperParams:
         N_BOTTLENECK_LAYERS_IN_STEM = value
 
     @staticmethod
-    def set_base_branch_filters(value: int = 16):
+    def set_base_branch_filters(value: int = 32):
         global BASE_BRANCH_FILTERS
         BASE_BRANCH_FILTERS = value
 
@@ -395,38 +395,55 @@ def get_loc_res(x, loc=0):
 
 
 
-def get_final_position(x, n_class=20, base_filters=BASE_BRANCH_FILTERS,):
-    ### v1 -- prediction
-    name_position = "position_1"
-    seq = tf.keras.Sequential()
-    seq.add(tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, axis=-1)))
-    for filters in (base_filters // 2, base_filters, base_filters*2):
-        seq.add(tf.keras.layers.Conv2D(filters, 3, padding='valid', strides=2, use_bias=False,  # on large dataset, no need to enable bias
-                kernel_initializer='he_normal')
-                )
-        seq.add(tf.keras.layers.BatchNormalization(axis=-1))
-        seq.add(tf.keras.layers.Activation('relu'))
-    seq.add(tf.keras.layers.GlobalAveragePooling2D())
-    seq.add(tf.keras.layers.Dense(4, activation=None))
-    seq.add(tf.keras.layers.Lambda(lambda x: tf.clip_by_value(x, 0.0, 1.0)))
-    concats = [None]
-    for loc in range(1, n_class):
-        x_loc = x[:,:,:,loc]
-        concats.append(seq(x_loc))
-    zeros = tf.zeros_like(concats[-1], dtype=tf.float32)
-    concats[0] = zeros
-    out = tf.stack(concats, axis=1)
-    h_max = tf.math.maximum(out[:,:,0], out[:,:,1])
-    w_max = tf.math.maximum(out[:, :, 2], out[:, :, 3])
-    out = tf.keras.layers.Lambda(lambda x:  tf.stack(x, axis=-1), name=name_position)(
-        [out[:,:,0], h_max, out[:,:,2], w_max])
-    return out
+# def get_final_position(x, n_class=20, base_filters=BASE_BRANCH_FILTERS,):
+#     ### v1 -- pred the position -- by individual loc
+#     name_position = "position_1"
+#     seq = tf.keras.Sequential()
+#     seq.add(tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, axis=-1)))
+#     for filters in (base_filters // 2, base_filters, base_filters*2):
+#         seq.add(tf.keras.layers.Conv2D(filters, 3, padding='valid', strides=2, use_bias=False,  # on large dataset, no need to enable bias
+#                 kernel_initializer='he_normal')
+#                 )
+#         seq.add(tf.keras.layers.BatchNormalization(axis=-1))
+#         seq.add(tf.keras.layers.Activation('relu'))
+#     seq.add(tf.keras.layers.GlobalAveragePooling2D())
+#     seq.add(tf.keras.layers.Dense(4, activation=None))
+#     seq.add(tf.keras.layers.Lambda(lambda x: tf.clip_by_value(x, 0.0, 1.0)))
+#     concats = [None]
+#     for loc in range(1, n_class):
+#         x_loc = x[:,:,:,loc]
+#         concats.append(seq(x_loc))
+#     zeros = tf.zeros_like(concats[-1], dtype=tf.float32)
+#     concats[0] = zeros
+#     # out = tf.stack(concats, axis=1)
+#     # h_max = tf.math.maximum(out[:,:,0], out[:,:,1])
+#     # w_max = tf.math.maximum(out[:, :, 2], out[:, :, 3])
+#     # out = tf.keras.layers.Lambda(lambda x:  tf.stack(x, axis=-1), name=name_position)(
+#     #     [out[:,:,0], h_max, out[:,:,2], w_max])
+#     out = tf.keras.layers.Lambda(lambda x:  tf.stack(x, axis=1), name=name_position)(concats)
+#     return out
 
+def get_final_position(x, n_class=20, base_filters=BASE_BRANCH_FILTERS,):
+    ### v1 -- pred the position
+    name_position = "position_1"
+    for i in range(5):
+        multiplier = 2 ** (i+1)
+        n_filters = n_class * multiplier
+        x = conv_block(x, n_filters, strides=2, bool_batchnorm=True, bool_activation=True)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x = tf.keras.layers.Dense(1024, activation="relu")(x)
+    x = tf.keras.layers.Dropout(0.5)(x)
+    x = tf.keras.layers.Dense(19*4, activation=None)(x)
+    x = tf.keras.layers.Lambda(lambda x: tf.clip_by_value(x, 0.0, 1.0))(x)
+    x = tf.keras.layers.Reshape(target_shape=(19, 4))(x)
+    zeros = tf.zeros_like(x[:,-1:, :], dtype=tf.float32)
+    x = tf.keras.layers.Concatenate(axis=1, name=name_position)([zeros, x])
+    return x
 
 
 
 def get_final_position_v2(segment_preds, img_height, img_width, n_class=20):
-    ### v2 -- get the value from preds
+    ### v2 -- get the value from segmentation_preds
 
     def get_indices_metrices():
         ones = tf.ones_like(segment_category, dtype=tf.int32)
@@ -484,8 +501,9 @@ def final_position_and_classification(segment_preds, img_height, img_width, n_cl
     name_vin = "vin_prob"
     # h_min_float, h_max_float, w_min_float, w_max_float
     edges_normalized = get_final_position_v2(segment_preds, img_height, img_width, n_class=n_class)
-    edges_normalized_preds = get_final_position(segment_preds, n_class, base_filters)
-    bounding_boxes_edges = edges_normalized_preds
+    # This prediction is not accurate at all
+    # edges_normalized_preds = get_final_position(segment_preds, n_class, base_filters)
+    bounding_boxes_edges = edges_normalized
     bounding_boxes = tf.stack(
         [bounding_boxes_edges[:,:,0],
          bounding_boxes_edges[:,:,2],
@@ -521,6 +539,7 @@ def final_position_and_classification(segment_preds, img_height, img_width, n_cl
         seq.add(tf.keras.layers.BatchNormalization(axis=-1))
         seq.add(tf.keras.layers.Activation('relu'))
     seq.add(tf.keras.layers.GlobalAveragePooling2D())
+    seq.add(tf.keras.layers.Dropout(0.5))
     seq.add(tf.keras.layers.Dense(36, activation="softmax"))
 
 
@@ -529,12 +548,139 @@ def final_position_and_classification(segment_preds, img_height, img_width, n_cl
     concats = []
     for loc in range(1, 18):
         attn_mask = get_attention_mask_loc(loc)
-        preds = segment_preds[:,:,:,loc]
-        preds = preds * attn_mask
-        preds = preds[:,:,:,tf.newaxis]
+        # --- option 1 only use that channel: high loss variance
+        # preds = segment_preds[:,:,:,loc]
+        # preds = preds * attn_mask
+        # preds = preds[:,:,:,tf.newaxis]
+        # --- option 2 use all channel
+        preds = segment_preds
+        preds = preds * attn_mask[:,:,:,tf.newaxis]
         concats.append(seq(preds))
     out_vin = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=1), name=name_vin)(concats)
-    return edges_normalized, out_vin, edges_normalized_preds
+    return edges_normalized, out_vin
+
+def final_position_and_classification_v2(segment_preds, img_height, img_width, n_class=20, base_filters=BASE_BRANCH_FILTERS):
+    name_vin = "vin_prob"
+    # h_min_float, h_max_float, w_min_float, w_max_float
+    edges_normalized = get_final_position_v2(segment_preds, img_height, img_width, n_class=n_class)
+    # This prediction is not accurate at all
+    # edges_normalized_preds = get_final_position(segment_preds, n_class, base_filters)
+    bounding_boxes_edges = edges_normalized
+    bounding_boxes = tf.stack(
+        [bounding_boxes_edges[:,:,0],
+         bounding_boxes_edges[:,:,2],
+         bounding_boxes_edges[:,:,1],
+         bounding_boxes_edges[:,:,3]],
+        axis=-1
+    )
+    bimage = tf.zeros_like(segment_preds[:,:,:,:1])
+    #
+    def get_attention_mask_loc(loc):
+        boxes = bounding_boxes[:,loc:loc+1,:]
+        mask = tf.image.draw_bounding_boxes(
+            bimage, boxes, colors=[[1]], name=None
+        )
+        mask = tf.squeeze(mask, axis=-1)
+        mask1 = tf.math.cumsum(mask, axis=1, reverse=False)
+
+        mask2 = tf.math.cumsum(mask, axis=1, reverse=True)
+        mask3 = tf.math.cumsum(mask, axis=2, reverse=False)
+        mask4 = tf.math.cumsum(mask, axis=2, reverse=True)
+        mask = mask1 * mask2 * mask3 * mask4
+        mask = tf.cast(mask > 0, tf.float32)
+        # shape is (batch, height, width)
+        return mask
+
+
+
+    def get_recognition_seq_v1():
+        """
+        Use each layer independently to get the prediction
+        """
+        seq = tf.keras.Sequential()
+        for filters in (base_filters , base_filters * 2, base_filters * 4, base_filters * 8, base_filters * 16):
+            seq.add(tf.keras.layers.Conv2D(filters, 3, padding='valid', strides=2, use_bias=False,
+                                           # on large dataset, no need to enable bias
+                                           kernel_initializer='he_normal')
+                    )
+            seq.add(tf.keras.layers.BatchNormalization(axis=-1))
+            seq.add(tf.keras.layers.Activation('relu'))
+        seq.add(tf.keras.layers.GlobalAveragePooling2D())
+        seq.add(tf.keras.layers.Dense(256, activation="relu"))
+        seq.add(tf.keras.layers.Dropout(0.5))
+        seq.add(tf.keras.layers.Dense(36, activation="softmax"))
+        concats = []
+        for loc in range(1, 18):
+            # attn_mask = get_attention_mask_loc(loc)
+            preds = segment_preds[:, :, :, loc:loc + 1]
+            # do not use stop_gradient -- it make the result worse
+            preds = tf.stop_gradient(preds)
+            # preds = tf.keras.layers.Concatenate(axis=-1)([preds, attn_mask[:,:,:,tf.newaxis]])
+            concats.append(seq(preds))
+        out_vin = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=1), name=name_vin)(concats)
+        return out_vin
+
+    def get_recognition_seq_v2():
+        """
+        Add attention mask
+        """
+        seq = tf.keras.Sequential()
+        for filters in (base_filters , base_filters * 2, base_filters * 4, base_filters * 8, base_filters * 16):
+            seq.add(tf.keras.layers.Conv2D(filters, 3, padding='valid', strides=2, use_bias=False,
+                                           # on large dataset, no need to enable bias
+                                           kernel_initializer='he_normal')
+                    )
+            seq.add(tf.keras.layers.BatchNormalization(axis=-1))
+            seq.add(tf.keras.layers.Activation('relu'))
+        seq.add(tf.keras.layers.GlobalAveragePooling2D())
+        seq.add(tf.keras.layers.Dropout(0.5))
+        seq.add(tf.keras.layers.Dense(36, activation="softmax"))
+        concats = []
+        for loc in range(1, 18):
+            attn_mask = get_attention_mask_loc(loc)
+            preds = segment_preds
+            preds = tf.keras.layers.Concatenate(axis=-1)([preds, attn_mask[:,:,:,tf.newaxis]])
+            concats.append(seq(preds))
+        out_vin = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=1), name=name_vin)(concats)
+        print("v2")
+        return out_vin
+
+    def get_recognition_seq_v3():
+        """
+        Add the whole segmentation preds
+        """
+        seq = tf.keras.Sequential()
+        for filters in (base_filters , base_filters * 2, base_filters * 4, base_filters * 8, base_filters * 16):
+            seq.add(tf.keras.layers.Conv2D(filters, 3, padding='valid', strides=2, use_bias=False,
+                                           # on large dataset, no need to enable bias
+                                           kernel_initializer='he_normal')
+                    )
+            seq.add(tf.keras.layers.BatchNormalization(axis=-1))
+            seq.add(tf.keras.layers.Activation('relu'))
+        seq.add(tf.keras.layers.GlobalAveragePooling2D())
+        seq.add(tf.keras.layers.Dense(1536, activation="relu"))
+        seq.add(tf.keras.layers.Dropout(0.5))
+        seq.add(tf.keras.layers.Dense(17 * 36, activation=None))
+        seq.add(tf.keras.layers.Reshape(target_shape=(17, 36)))
+
+        # concats = []
+        # for loc in range(1, 18):
+        #     attn_mask = get_attention_mask_loc(loc)
+        #     concats.append(attn_mask[:,:,:,tf.newaxis])
+        # all_attn_mask = tf.keras.layers.Add()(concats)
+        # preds = tf.concat([segment_preds, all_attn_mask], axis=-1)
+        preds = segment_preds
+        out_vin = seq(preds)
+        out_vin = tf.keras.layers.Softmax(axis=-1, name=name_vin)(out_vin)
+        print("v4")
+
+        return out_vin
+
+    out_vin = get_recognition_seq_v2()
+
+
+    return edges_normalized, out_vin
+
 
 
 
@@ -574,7 +720,7 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
     # _, position_output = get_final_position_v2(seg_output_prob, img_height=image_shape[0], img_width=image_shape[1],
     #                                            n_class=n_class)
 
-    position_output, prob_vin, position_output_preds = final_position_and_classification(
+    position_output, prob_vin = final_position_and_classification_v2(
         seg_output_prob,
         img_height=image_shape[0],
         img_width=image_shape[1],
@@ -586,12 +732,11 @@ def seg_hrnet(image_shape=(128, 1024, 3), n_class=20):
                            outputs = [
                                seg_output_prob,
                                position_output,
-                               position_output_preds,
                                prob_vin
                            ],
                            )
 
-
+    print("2023-11-10-v1")
     return model
 
 # TODO 1. vin recog add positional encoding ? maybe it is not the best solution
